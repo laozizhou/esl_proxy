@@ -10,7 +10,7 @@
 #include "scheduler/conf.h"
 #include "scheduler/dispatch.h"
 // #include "scheduler/template_graph.h"
-#include "cases/paged_attention_subgraph.h"
+#include "cases/qwen3_14b_decode_subgraph.h"
 #include "common/task.h"
 #include "common/queue.h"
 

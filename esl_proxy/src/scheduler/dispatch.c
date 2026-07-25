@@ -189,7 +189,6 @@ static inline void push_2_completed_queue(int tid)
 
 static inline int send_task(ctrl_t *ctrl, int type)
 {
-    int exe_type = type;
     // Check both slots - slot is free if neither slot 0 nor slot 1 has been sent a task
     uint64_t free_bitmap = ctrl->free_bitmap[type][0] & ctrl->free_bitmap[type][1];
     int cnt = __builtin_popcountll(free_bitmap);

@@ -69,7 +69,7 @@ int main(void) {
         cpu_set_t mask;
         CPU_ZERO(&mask);
         CPU_SET((2*i + 1), &mask);
-        pthread_setaffinity_np(painter_threads[i], sizeof(cpu_set_t), &mask);
+        pthread_setaffinity_np(dispatch_threads[i], sizeof(cpu_set_t), &mask);
 #endif
     }
 
