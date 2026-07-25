@@ -37,6 +37,9 @@ extern ctrl_t g_ctrl_t[DISPATCH_THREAD_CNT];
 
 extern int g_subtask_cnt;
 
+void init_predecessors(void);
+uint32_t ring_min_uncompleted(void);
+
 struct ring_buf {
     uint16_t size;
     uint16_t* head;

@@ -13,6 +13,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include <stdatomic.h>
 
 #include "conf.h"
 #include "task.h"
@@ -20,9 +21,15 @@
 
 
 typedef struct ctrl {
-    // 64CORES
-    uint64_t free_bitmap[TASK_TYPE_CNT][AIC_OSTD];
-    uint64_t msg_bitmap[EXE_TYPE_CNT][AIC_OSTD];
+    /*
+     * free_bitmap：dispatcher 侧可分配槽位位图。
+     * Step 2 起由 dispatch/executor 跨线程协作访问，必须使用 C11 原子类型。
+     */
+    _Atomic uint64_t free_bitmap[TASK_TYPE_CNT][AIC_OSTD];
+    /*
+     * msg_bitmap：executor 完成后发布 done bit，dispatcher 通过 exchange 唯一消费。
+     */
+    _Atomic uint64_t msg_bitmap[EXE_TYPE_CNT][AIC_OSTD];
 
     uint16_t task_id_map1[EXE_TYPE_CNT][AIC_CNT];
     uint16_t task_id_map2[EXE_TYPE_CNT][AIC_CNT];

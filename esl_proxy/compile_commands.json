@@ -1,0 +1,37 @@
+[
+  {
+    "directory": "/Users/wangshuai/Desktop/cursor project/simpler-npu-sch/my-esl-proxy/esl_proxy/esl_proxy",
+    "command": "cc -g -std=c11 -Wall -Wextra -pedantic -O2 -D_POSIX_C_SOURCE=199309L -I include/algorithm -I cases -DORCH_CASE=qwen3_dynamic_tensormap.h -MMD -MP -Wno-error=implicit-function-declaration -DQWEN3_SPMD_TIER=2 -c src/main.c -o build/obj/main.o",
+    "file": "/Users/wangshuai/Desktop/cursor project/simpler-npu-sch/my-esl-proxy/esl_proxy/esl_proxy/src/main.c"
+  },
+  {
+    "directory": "/Users/wangshuai/Desktop/cursor project/simpler-npu-sch/my-esl-proxy/esl_proxy/esl_proxy",
+    "command": "cc -g -std=c11 -Wall -Wextra -pedantic -O2 -D_POSIX_C_SOURCE=199309L -I include/algorithm -I cases -DORCH_CASE=qwen3_dynamic_tensormap.h -MMD -MP -Wno-error=implicit-function-declaration -DQWEN3_SPMD_TIER=2 -c src/algorithm/executor.c -o build/obj/algorithm/executor.o",
+    "file": "/Users/wangshuai/Desktop/cursor project/simpler-npu-sch/my-esl-proxy/esl_proxy/esl_proxy/src/algorithm/executor.c"
+  },
+  {
+    "directory": "/Users/wangshuai/Desktop/cursor project/simpler-npu-sch/my-esl-proxy/esl_proxy/esl_proxy",
+    "command": "cc -g -std=c11 -Wall -Wextra -pedantic -O2 -D_POSIX_C_SOURCE=199309L -I include/algorithm -I cases -DORCH_CASE=qwen3_dynamic_tensormap.h -MMD -MP -Wno-error=implicit-function-declaration -DQWEN3_SPMD_TIER=2 -c src/algorithm/dispatch.c -o build/obj/algorithm/dispatch.o",
+    "file": "/Users/wangshuai/Desktop/cursor project/simpler-npu-sch/my-esl-proxy/esl_proxy/esl_proxy/src/algorithm/dispatch.c"
+  },
+  {
+    "directory": "/Users/wangshuai/Desktop/cursor project/simpler-npu-sch/my-esl-proxy/esl_proxy/esl_proxy",
+    "command": "cc -g -std=c11 -Wall -Wextra -pedantic -O2 -D_POSIX_C_SOURCE=199309L -I include/algorithm -I cases -DORCH_CASE=qwen3_dynamic_tensormap.h -MMD -MP -Wno-error=implicit-function-declaration -DQWEN3_SPMD_TIER=2 -c src/algorithm/cutter.c -o build/obj/algorithm/cutter.o",
+    "file": "/Users/wangshuai/Desktop/cursor project/simpler-npu-sch/my-esl-proxy/esl_proxy/esl_proxy/src/algorithm/cutter.c"
+  },
+  {
+    "directory": "/Users/wangshuai/Desktop/cursor project/simpler-npu-sch/my-esl-proxy/esl_proxy/esl_proxy",
+    "command": "cc -g -std=c11 -Wall -Wextra -pedantic -O2 -D_POSIX_C_SOURCE=199309L -I include/algorithm -I cases -DORCH_CASE=qwen3_dynamic_tensormap.h -MMD -MP -Wno-error=implicit-function-declaration -DQWEN3_SPMD_TIER=2 -c src/algorithm/manager.c -o build/obj/algorithm/manager.o",
+    "file": "/Users/wangshuai/Desktop/cursor project/simpler-npu-sch/my-esl-proxy/esl_proxy/esl_proxy/src/algorithm/manager.c"
+  },
+  {
+    "directory": "/Users/wangshuai/Desktop/cursor project/simpler-npu-sch/my-esl-proxy/esl_proxy/esl_proxy",
+    "command": "cc -g -std=c11 -Wall -Wextra -pedantic -O2 -D_POSIX_C_SOURCE=199309L -I include/algorithm -I cases -DORCH_CASE=qwen3_dynamic_tensormap.h -MMD -MP -Wno-error=implicit-function-declaration -DQWEN3_SPMD_TIER=2 -c src/algorithm/log.c -o build/obj/algorithm/log.o",
+    "file": "/Users/wangshuai/Desktop/cursor project/simpler-npu-sch/my-esl-proxy/esl_proxy/esl_proxy/src/algorithm/log.c"
+  },
+  {
+    "directory": "/Users/wangshuai/Desktop/cursor project/simpler-npu-sch/my-esl-proxy/esl_proxy/esl_proxy",
+    "command": "cc -g -std=c11 -Wall -Wextra -pedantic -O2 -D_POSIX_C_SOURCE=199309L -I include/algorithm -I cases -DORCH_CASE=qwen3_dynamic_tensormap.h -MMD -MP -Wno-error=implicit-function-declaration -DQWEN3_SPMD_TIER=2 -c src/algorithm/shm.c -o build/obj/algorithm/shm.o",
+    "file": "/Users/wangshuai/Desktop/cursor project/simpler-npu-sch/my-esl-proxy/esl_proxy/esl_proxy/src/algorithm/shm.c"
+  }
+]

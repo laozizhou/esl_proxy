@@ -53,7 +53,8 @@ void add_successors(uint16_t ready_cnt[], uint16_t rq_buf[][RQ_BATCH_SIZE]) {
     uint16_t end = atomic_load(&g_task_id);
     uint16_t tmp = g_commit_task_id + PRE_BATCH_SIZE;
     end = tmp > end ? end : tmp;
-    while ( g_commit_task_id <= end)
+    /* 右开窗口 [g_commit_task_id, end)：g_task_id 是下一待分配 ID，不能提交等于 end 的 slot。 */
+    while (g_commit_task_id < end)
     {
         uint16_t task_idx = g_commit_task_id;
         struct predecessor_list *ptr = &g_predecessors[task_idx];

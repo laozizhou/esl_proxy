@@ -20,6 +20,7 @@
 
 #define CUTTER_THREAD_CNT 1
 #define DISPATCH_THREAD_CNT 1
+#define EXECUTOR_THREAD_CNT 1
 
 /* 1: compile in worker logs; toggle at runtime via g_worker_log or WORKER_LOG env */
 #define WORKER_LOG 1
@@ -43,6 +44,19 @@
 /* 1: skip tensormap lookup/insert and succeed(); all tasks submit with no edges */
 #ifndef NO_DEPS
 #define NO_DEPS 0
+#endif
+
+/* 1: enable early-dispatch; 0: disable (baseline). Override: make ED_ENABLE=0/1 */
+#ifndef ED_ENABLE
+#define ED_ENABLE 1
+#endif
+
+/*
+ * ED_UNFIN_THRESHOLD: stage s-task only when fanin 齐且 unfin_pred_cnt <= N.
+ * 一期默认 0xFFFF 等价于「前驱全部 dispatch 即可 stage」。
+ */
+#ifndef ED_UNFIN_THRESHOLD
+#define ED_UNFIN_THRESHOLD 0xFFFF
 #endif
 
 #endif /* ALGORITHM_CONF_H */

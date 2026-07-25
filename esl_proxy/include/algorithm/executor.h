@@ -14,8 +14,19 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
+#include <stdatomic.h>
 
 #include "conf.h"
+
+/*
+ * Executor slot 发布状态（Step 2+ normal dispatch / Step 7 ed gate 使用）。
+ * EMPTY：无任务；GATED：已 stage 等 notify；RUNNABLE：executor 可 tick。
+ */
+typedef enum {
+    EXE_SLOT_EMPTY    = 0,
+    EXE_SLOT_GATED    = 1,
+    EXE_SLOT_RUNNABLE = 2,
+} exe_slot_state_t;
 
 /*
  * Executor
@@ -26,6 +37,12 @@ typedef struct executor {
     uint16_t block_idx[AIC_OSTD];
     uint16_t duration[AIC_OSTD];
     uint64_t base[AIC_OSTD];
+    /* 跨线程 payload 发布边界；ED_ENABLE=0 时 normal dispatch 也依赖此字段 */
+    _Atomic uint8_t slot_state[AIC_OSTD];
+#if ED_ENABLE
+    /* 硬件 doorbell 模型占位；仅 notify_claimed CAS 胜者写 1 */
+    _Atomic uint8_t doorbell[AIC_OSTD];
+#endif
 } executor_t;
 
 /*

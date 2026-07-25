@@ -11,6 +11,7 @@
 #include "conf.h"
 #include "cutter.h"
 #include "dispatch.h"
+#include "early_dispatch.h"
 #include "executor.h"
 #include "log.h"
 #include "manager.h"
@@ -58,14 +59,15 @@ int main(void) {
     ring_buf_init();
     init_predecessors();
     init_ctrl_t();
-    
-    // executor_init();
+    ed_init();
+
+    executor_init();
 
     // pthread_create(&manager_thread, NULL, manager_worker, &g_mem_pool);
 
-    // for (int i = 0; i < EXECUTOR_THREAD_CNT; i++) {
-    //     pthread_create(&executor_threads[i], NULL, executor_worker, (void *)(intptr_t)i);
-    // }
+    for (int i = 0; i < EXECUTOR_THREAD_CNT; i++) {
+        pthread_create(&executor_threads[i], NULL, executor_worker, (void *)(intptr_t)i);
+    }
     for (int i = 0; i < CUTTER_THREAD_CNT; i++) {
         pthread_create(&cutter_threads[i], NULL, cutter_worker,
                        (void *)(intptr_t)i);
@@ -91,9 +93,9 @@ int main(void) {
 #endif
     atomic_store(&g_orch_is_done, true);
 
-    // for (int i = 0; i < EXECUTOR_THREAD_CNT; i++) {
-    //     pthread_join(executor_threads[i], NULL);
-    // }
+    for (int i = 0; i < EXECUTOR_THREAD_CNT; i++) {
+        pthread_join(executor_threads[i], NULL);
+    }
     for (int i = 0; i < CUTTER_THREAD_CNT; i++) {
         pthread_join(cutter_threads[i], NULL);
     }

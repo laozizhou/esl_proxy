@@ -13,6 +13,7 @@
 #include "log.h"
 #include "executor.h"
 #include "dispatch.h"
+#include "early_dispatch.h"
 #include "ring_buf.h"
 
 extern _Atomic bool g_is_done;
@@ -29,84 +30,98 @@ void executor_init(void)
                 g_executors[exe_type][core].block_idx[i] = 0;
                 g_executors[exe_type][core].duration[i] = 0;
                 g_executors[exe_type][core].base[i] = 0;
+                atomic_init(&g_executors[exe_type][core].slot_state[i],
+                            EXE_SLOT_EMPTY);
+#if ED_ENABLE
+                atomic_init(&g_executors[exe_type][core].doorbell[i], 0);
+#endif
             }
         }
     }
+}
+
+/*
+ * slot 完成的唯一收口：
+ * 1) 先 release 置 EMPTY，让 dispatcher 可安全回收 free bit。
+ * 2) 再 release 置 msg_bitmap done bit，触发 dispatcher drain。
+ */
+static inline void complete_slot(int type, int core, int slot, uint16_t task_id_done)
+{
+    executor_t *e = &g_executors[type][core];
+    e->block_idx[slot] = 0;
+    e->idx = AIC_OSTD;
+#if ED_ENABLE
+    /* Step 2：仅做 tag 校验后清记录，不接 Hook。 */
+    ed_task_dispatch_record_clear(task_id_done);
+#else
+    (void)task_id_done;
+#endif
+    atomic_store_explicit(&e->slot_state[slot], EXE_SLOT_EMPTY,
+                          memory_order_release);
+    atomic_fetch_or_explicit(&g_ctrl_t[core % DISPATCH_THREAD_CNT].msg_bitmap[type][slot],
+                             ((uint64_t)0x1 << core), memory_order_release);
 }
 
 void* executor_worker(void *arg)
 {
     (void)arg;
     int total_write_cnt = 0;
-    int iterations = 0;
     while (!atomic_load(&g_is_done))
     {
         for (int exe_type = 0; exe_type < EXE_TYPE_CNT; exe_type++) {
             for (int core = 0; core < AIC_CNT; core++) {
-                uint8_t idx = g_executors[exe_type][core].idx;
-                if (idx < AIC_OSTD) {
-                    uint16_t task_id = g_executors[exe_type][core].tasks[idx];
-                    uint16_t block_idx = g_executors[exe_type][core].block_idx[idx];
+                executor_t *e = &g_executors[exe_type][core];
+                for (int slot = 0; slot < AIC_OSTD; slot++) {
+                    uint8_t state = atomic_load_explicit(&e->slot_state[slot],
+                                                         memory_order_acquire);
+                    /* EMPTY/GATED 都不执行；只有 RUNNABLE 才 tick。 */
+                    if (state != EXE_SLOT_RUNNABLE) {
+                        continue;
+                    }
+
+#if ED_ENABLE
+                    /* Step 2: doorbell 仅做硬件信号占位，清零不影响 gate 判据。 */
+                    atomic_store_explicit(&e->doorbell[slot], 0, memory_order_relaxed);
+#endif
+
+                    uint16_t task_id = e->tasks[slot];
                     uint32_t block_count = g_basic_buf[task_id & RING_MASK].count;
-                    
-                    // Handle SPMD tasks with multiple blocks
+
                     if (block_count > 1) {
-                        // Check if current block is done
-                        if (g_executors[exe_type][core].duration[idx] == 0) {
-                            block_idx++;
-                            g_executors[exe_type][core].block_idx[idx] = block_idx;
-                            // Reset duration for next block if not done
-                            if (block_idx < block_count) {
-                                // Get base duration for this task (reuse original value)
-                                g_executors[exe_type][core].duration[idx] = 
-                                    (uint16_t)g_basic_buf[task_id & RING_MASK].duration;
-                            }
-                        } else {
-                            // Decrement current block's duration
-                            g_executors[exe_type][core].duration[idx]--;
+                        /*
+                         * 保留 SPMD 语义：单次 dispatch 的条目要执行完所有 block，
+                         * 不能在首块结束就直接发布 completed。
+                         */
+                        if (e->duration[slot] > 0) {
+                            e->duration[slot]--;
+                            continue;
                         }
-                        
-                        // Check if all blocks are done
-                        if (block_idx >= block_count) {
-                            g_ctrl_t[core % DISPATCH_THREAD_CNT].msg_bitmap[exe_type][idx] |= ((uint64_t)0x1 << core);
-                            g_executors[exe_type][core].idx = AIC_OSTD;
-                            // Reset block_idx for reuse
-                            g_executors[exe_type][core].block_idx[idx] = 0;
-                            total_write_cnt++;
-                            WORKER_LOGF("total,%d,core,%d,type,%d,blocks,%u", total_write_cnt, core, exe_type, block_count);
+                        uint16_t next_block = ++e->block_idx[slot];
+                        if (next_block < block_count) {
+                            uint32_t raw_duration = g_basic_buf[task_id & RING_MASK].duration;
+                            e->duration[slot] = (raw_duration > 10000)
+                                                  ? (uint16_t)(raw_duration / 10000)
+                                                  : 1;
+                            continue;
                         }
+                        total_write_cnt++;
+                        WORKER_LOGF("total,%d,core,%d,type,%d,blocks,%u",
+                                    total_write_cnt, core, exe_type, block_count);
+                        complete_slot(exe_type, core, slot, task_id);
                     } else {
-                        // Non-SPMD task: simple single-block execution
-                        if (g_executors[exe_type][core].duration[idx] > 0) {
-                            g_executors[exe_type][core].duration[idx]--;
+                        if (e->duration[slot] > 0) {
+                            e->duration[slot]--;
                         }
-                        if (g_executors[exe_type][core].duration[idx] == 0) {
-                            g_ctrl_t[core % DISPATCH_THREAD_CNT].msg_bitmap[exe_type][idx] |= ((uint64_t)0x1 << core);
-                            g_executors[exe_type][core].idx = AIC_OSTD;
-                            // Reset block_idx for reuse
-                            g_executors[exe_type][core].block_idx[idx] = 0;
+                        if (e->duration[slot] == 0) {
                             total_write_cnt++;
                             WORKER_LOGF("total,%d,core,%d,type,%d", total_write_cnt, core, exe_type);
-                        }
-                    }
-                } else {
-                    // Find a slot with positive duration to work on
-                    for (size_t i = 0; i < AIC_OSTD; i++)
-                    {
-                        if(g_executors[exe_type][core].duration[i] > 0) {
-                            g_executors[exe_type][core].idx = i;
-                            break;
+                            complete_slot(exe_type, core, slot, task_id);
                         }
                     }
                 }
             }
         }
-        iterations++;
-        // Add a small delay to prevent busy-waiting
-        if (iterations % 1000000 == 0) {
-            WORKER_LOGF("executor iter=%d total_write=%d", iterations, total_write_cnt);
-        }
     }
-    WORKER_LOGF("finished, total_write_cnt=%d g_task_id=%d", total_write_cnt, g_task_id);
+    WORKER_LOGF("finished, total_write_cnt=%d", total_write_cnt);
     return NULL;
 }

@@ -39,3 +39,8 @@ void init_predecessors(void)
     }
 }
 
+uint32_t ring_min_uncompleted(void)
+{
+    return (uint32_t)atomic_load_explicit(&g_min_uncomplete_task, memory_order_acquire);
+}
+
