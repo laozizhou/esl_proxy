@@ -189,20 +189,42 @@ static inline void push_2_completed_queue(int tid)
 
 static inline int send_task(ctrl_t *ctrl, int type)
 {
-    // Check both slots - slot is free if neither slot 0 nor slot 1 has been sent a task
-    uint64_t free_bitmap = ctrl->free_bitmap[type][0] & ctrl->free_bitmap[type][1];
-    int cnt = __builtin_popcountll(free_bitmap);
-    if (cnt <= 0) {
-        WORKER_LOGF("send,free_cnt,%d", cnt);
+    // Check both slots - slot is free if neither slot 0 nor slot 1 has been sent a task.
+    // Mask with this die's aicore_mask so ctz stays within owned cores.
+    uint64_t free_bitmap = (ctrl->free_bitmap[type][0] & ctrl->free_bitmap[type][1])
+                          & ctrl->aicore_mask;
+    int free_demand = __builtin_popcountll(free_bitmap);
+    if (free_demand <= 0) {
+        WORKER_LOGF("send,free_cnt,%d", free_demand);
         return 0;
     }
     uint32_t task_ids[AIC_CNT];
-    if (!batch_dequeue(&ctrl->ready_queue[type], task_ids, &cnt)){
-        return 0;
+    uint32_t got = (uint32_t)free_demand;
+    if (!batch_dequeue(&ctrl->ready_queue[type], task_ids, &got)) {
+        /* Cross-die work-stealing: local ready_queue[type] empty but free cores
+         * remain. Steal from other dies' same-type queues; batch_dequeue clamps
+         * to min(victim.cnt, free_demand) under the victim lock. */
+        int stole = 0;
+        for (uint32_t v = 0; v < DISPATCH_THREAD_CNT; v++) {
+            if (v == ctrl->tid) {
+                continue;
+            }
+            uint32_t want = (uint32_t)free_demand;
+            if (batch_dequeue(&g_ctrl_t[v].ready_queue[type], task_ids, &want)) {
+                got = want;
+                WORKER_LOGF("steal,thief,%u,victim,%u,cnt,%u,type,%d",
+                            ctrl->tid, v, got, type);
+                stole = 1;
+                break;
+            }
+        }
+        if (!stole) {
+            return 0;
+        }
     }
-    
+
     int sent = 0;
-    for (int i = 0; i < cnt; i++) {
+    for (uint32_t i = 0; i < got; i++) {
         uint32_t task_id = task_ids[i];
         uint64_t idx = (uint64_t)__builtin_ctzll(free_bitmap);
 
@@ -211,7 +233,7 @@ static inline int send_task(ctrl_t *ctrl, int type)
         int slot = (ctrl->free_bitmap[type][0] & mask) != 0 ? 0 : 1;
         // Set executor's tasks and duration
         int core = (int)idx;
-        
+
         if (slot == 1) {
             ctrl->task_id_map2[type][idx] = task_id;
             #ifdef REAL_CHIP
@@ -223,14 +245,14 @@ static inline int send_task(ctrl_t *ctrl, int type)
             *ctrl->aicore_spr_1[type][idx] = task_id;
             #endif
         }
-        
+
         // Clear the free bit for this core/slot combination (mark as busy)
         ctrl->free_bitmap[type][slot] &= ~mask;
 
         #ifndef REAL_CHIP
         ctrl->msg_bitmap[type][slot] |= mask;
         #endif
-        
+
         WORKER_LOGF("send,task_id,%u,core,%d,slot,%d,type,%d", task_id, core, slot, type);
         sent++;
         free_bitmap &= ~mask;
