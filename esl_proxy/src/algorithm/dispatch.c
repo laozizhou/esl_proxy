@@ -224,6 +224,14 @@ static inline int send_task(ctrl_t *ctrl, int type)
             ctrl->task_id_map1[type][idx] = task_id;
         }
 
+#if ED_ENABLE
+        /*
+         * Step 4：record 必须在 RUNNABLE 发布前写；
+         * 否则 Hook0/选核可能读到未初始化位置。
+         */
+        ed_task_dispatch_record_store(task_id, core, slot, type);
+#endif
+
         /*
          * Step 2 normal 发布链：
          * payload + task_id_map 写完后，release 发布 RUNNABLE。
@@ -233,6 +241,10 @@ static inline int send_task(ctrl_t *ctrl, int type)
                               EXE_SLOT_RUNNABLE, memory_order_release);
         WORKER_LOGF("send,task_id,%u,core,%d,slot,%d,type,%d", task_id, core, slot, type);
         sent++;
+#if ED_ENABLE
+        /* Step 4 Hook 0：成功发布后沿边传播 dispatch_fanin。 */
+        propagate_dispatch_fanin(task_id);
+#endif
         free_bitmap &= ~mask;
     }
     return sent;

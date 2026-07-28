@@ -201,9 +201,73 @@ void ed_notify_once(uint32_t task_id, uint64_t record, ed_notify_source_t source
 }
 
 #if ED_ENABLE
+static inline void ed_enqueue_or_abandon(uint16_t task_id)
+{
+    if (enqueue(&g_ed_ready_queue, task_id)) {
+        return;
+    }
+
+    uint16_t s_idx = (uint16_t)(task_id & RING_MASK);
+    uint8_t expected = ED_SPEC_STAGING;
+    (void)atomic_compare_exchange_strong_explicit(
+        &g_spec_state[s_idx], &expected, ED_SPEC_NONE,
+        memory_order_acq_rel, memory_order_acquire);
+}
+
+static inline void ed_maybe_enter_staging(uint16_t s_id, uint16_t s_idx, uint16_t fanin_now)
+{
+    if (fanin_now != g_dispatch_fanin_target[s_idx]) {
+        return;
+    }
+    if (g_basic_buf[s_idx].count != 1) {
+        return;
+    }
+
+    uint16_t unfin = atomic_load_explicit(&g_unfin_pred_cnt[s_idx], memory_order_acquire);
+    if (unfin > ED_UNFIN_THRESHOLD) {
+        return;
+    }
+
+    uint8_t expected = ED_SPEC_NONE;
+    if (atomic_compare_exchange_strong_explicit(
+            &g_spec_state[s_idx], &expected, ED_SPEC_STAGING,
+            memory_order_acq_rel, memory_order_relaxed)) {
+        atomic_fetch_add_explicit(&g_ed_stage_cnt, 1, memory_order_relaxed);
+        ed_enqueue_or_abandon(s_id);
+    }
+}
+
 void propagate_dispatch_fanin(uint16_t p_id)
 {
-    (void)p_id;
+    uint16_t p_idx = (uint16_t)(p_id & RING_MASK);
+    ed_edge_lock(p_idx);
+    if (atomic_load_explicit(&g_ring_task_tag[p_idx], memory_order_acquire) != (uint32_t)p_id) {
+        ed_edge_unlock(p_idx);
+        return;
+    }
+
+    /* 持久记录“该 generation 曾 dispatch”；完成时不清。 */
+    atomic_store_explicit(&g_dispatch_tag[p_idx], (uint32_t)p_id, memory_order_release);
+
+    uint16_t succ_cnt = g_successor_buf[p_idx].cnt;
+    for (uint16_t k = 0; k < succ_cnt; k++) {
+        uint16_t s_id = g_successor_buf[p_idx].node[k];
+        uint16_t s_idx = (uint16_t)(s_id & RING_MASK);
+
+        if (g_basic_buf[s_idx].count != 1) {
+            continue;
+        }
+
+        uint16_t fanin_now = (uint16_t)(atomic_fetch_add_explicit(
+                                 &g_dispatch_fanin[s_idx], 1, memory_order_relaxed) +
+                             1);
+#if ED_HOOK0_CONTRIB_STATS
+        atomic_fetch_add_explicit(&g_ed_hook0_contrib_cnt, 1, memory_order_relaxed);
+#endif
+        ed_maybe_enter_staging(s_id, s_idx, fanin_now);
+    }
+
+    ed_edge_unlock(p_idx);
 }
 
 int try_early_dispatch(int tid)

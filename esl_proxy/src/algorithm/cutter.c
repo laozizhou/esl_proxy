@@ -1,4 +1,5 @@
 #include "cutter.h"
+#include "early_dispatch.h"
 #include "log.h"
 #include "ring_buf.h"
 #include <stdint.h>
@@ -49,6 +50,36 @@ static inline bool update_task_state(uint16_t cnt, uint16_t* cq_buf)
         g_min_uncomplete_task, end, g_ctrl_t[0].ready_queue[2].cnt, g_ctrl_t[0].ready_queue[1].cnt);
 }
 
+#if ED_ENABLE
+static inline void cutter_maybe_enter_staging(uint16_t s_full, uint16_t s_idx, uint16_t fanin_now)
+{
+    if (fanin_now != g_dispatch_fanin_target[s_idx]) {
+        return;
+    }
+    if (g_basic_buf[s_idx].count != 1) {
+        return;
+    }
+
+    uint16_t unfin = atomic_load_explicit(&g_unfin_pred_cnt[s_idx], memory_order_acquire);
+    if (unfin > ED_UNFIN_THRESHOLD) {
+        return;
+    }
+
+    uint8_t expected = ED_SPEC_NONE;
+    if (atomic_compare_exchange_strong_explicit(
+            &g_spec_state[s_idx], &expected, ED_SPEC_STAGING,
+            memory_order_acq_rel, memory_order_relaxed)) {
+        atomic_fetch_add_explicit(&g_ed_stage_cnt, 1, memory_order_relaxed);
+        if (!enqueue(&g_ed_ready_queue, s_full)) {
+            uint8_t staged = ED_SPEC_STAGING;
+            (void)atomic_compare_exchange_strong_explicit(
+                &g_spec_state[s_idx], &staged, ED_SPEC_NONE,
+                memory_order_acq_rel, memory_order_acquire);
+        }
+    }
+}
+#endif
+
 void add_successors(uint16_t ready_cnt[], uint16_t rq_buf[][RQ_BATCH_SIZE]) {
     uint16_t end = atomic_load(&g_task_id);
     uint16_t tmp = g_commit_task_id + PRE_BATCH_SIZE;
@@ -56,40 +87,115 @@ void add_successors(uint16_t ready_cnt[], uint16_t rq_buf[][RQ_BATCH_SIZE]) {
     /* 右开窗口 [g_commit_task_id, end)：g_task_id 是下一待分配 ID，不能提交等于 end 的 slot。 */
     while (g_commit_task_id < end)
     {
-        uint16_t task_idx = g_commit_task_id;
-        struct predecessor_list *ptr = &g_predecessors[task_idx];
+        uint16_t s_full = g_commit_task_id;
+        uint16_t s_idx = (uint16_t)(s_full & RING_MASK);
+        struct predecessor_list *ptr = &g_predecessors[s_idx];
+        task_type_t s_type = g_basic_buf[s_idx].type;
+
         if (ptr->cnt <= 0) {
-            // WORKER_LOGF("ready, task_id,%u, task_idx,%u, ready_cnt,%u", g_commit_task_id, task_idx, *ready_cnt);
-            task_type_t type = g_basic_buf[g_commit_task_id].type;
-            rq_buf[type][ready_cnt[type]] = g_commit_task_id++;
-            ready_cnt[type]++;
-            WORKER_LOGF("ready_cnt[%d],%d",type, ready_cnt[type]);
+            ed_init_task_meta(s_full, 0);
+            g_predecessor_cnt[s_idx] = 0;
+            rq_buf[s_type][ready_cnt[s_type]++] = s_full;
+            g_commit_task_id++;
+            WORKER_LOGF("ready_cnt[%d],%d", s_type, ready_cnt[s_type]);
             continue;
         }
-        uint16_t precessor_id = 0;
+
+        uint16_t original_cnt = ptr->cnt;
         uint16_t predecessor_cnt = 0;
-        while (ptr->cnt > 0)
-        {
-            precessor_id = *(ptr->exp);
-            uint16_t precessor_idx = precessor_id;
-            if(g_state_buf[precessor_idx].state != TASK_STATUS_COMPLETED) {
-                uint16_t successor_idx = g_successor_buf[precessor_idx].cnt++;
-                g_successor_buf[precessor_idx].node[successor_idx] = g_commit_task_id;
-                g_state_buf[precessor_idx].successor_cnt++;
-                predecessor_cnt++;
-                WORKER_LOGF("add, task_id,%u, successor_cnt,%u, successor_id, %u", precessor_id, g_successor_buf[precessor_idx].cnt, g_commit_task_id);
+        struct {
+            uint16_t p_full;
+            uint16_t p_idx;
+        } survivors[CON_NODE_CNT];
+
+        /* 第一趟：本地扫描 pred，不进锁，不写 successor list */
+        for (uint16_t k = 0; k < original_cnt; k++) {
+            uint16_t p_full = ptr->exp[k];
+            uint16_t p_idx = (uint16_t)(p_full & RING_MASK);
+            if (g_state_buf[p_idx].state == TASK_STATUS_COMPLETED) {
+                continue;
             }
-            ptr->cnt--;
-            ptr->exp++;
+            if (predecessor_cnt < CON_NODE_CNT) {
+                survivors[predecessor_cnt].p_full = p_full;
+                survivors[predecessor_cnt].p_idx = p_idx;
+                predecessor_cnt++;
+            }
         }
-        g_predecessor_cnt[task_idx] = predecessor_cnt;
-        if (predecessor_cnt <= 0)
-        {
-            task_type_t type = g_basic_buf[g_commit_task_id].type;
-            rq_buf[type][ready_cnt[type]] = g_commit_task_id;
-            ready_cnt[type]++;
-            WORKER_LOGF("ready_cnt[%d],%d",type, ready_cnt[type]);
+
+        /* 关键屏障：先固化 s 元数据，再 append 边，避免 Hook0 读到旧 target。 */
+        ed_init_task_meta(s_full, predecessor_cnt);
+        g_predecessor_cnt[s_idx] = predecessor_cnt;
+
+#if ED_ENABLE
+        for (uint16_t k = 0; k < predecessor_cnt; k++) {
+            g_ed_pred_snapshot[s_idx].node[k] = survivors[k].p_full;
         }
+        g_ed_pred_snapshot[s_idx].cnt = predecessor_cnt;
+#endif
+
+        if (predecessor_cnt == 0) {
+            rq_buf[s_type][ready_cnt[s_type]++] = s_full;
+            WORKER_LOGF("ready_cnt[%d],%d", s_type, ready_cnt[s_type]);
+            ptr->exp += original_cnt;
+            ptr->cnt = 0;
+            g_commit_task_id++;
+            continue;
+        }
+
+        /* 第二趟：锁内 append，命中 dispatch_tag 时补 late-arrival fanin。 */
+        for (uint16_t k = 0; k < predecessor_cnt; k++) {
+            uint16_t p_full = survivors[k].p_full;
+            uint16_t p_idx = survivors[k].p_idx;
+
+#if ED_ENABLE
+            ed_edge_lock(p_idx);
+            if (atomic_load_explicit(&g_ring_task_tag[p_idx], memory_order_acquire) !=
+                (uint32_t)p_full) {
+                ed_edge_unlock(p_idx);
+
+                uint16_t old_unfin = atomic_fetch_sub_explicit(
+                    &g_unfin_pred_cnt[s_idx], 1, memory_order_acq_rel);
+                if (old_unfin > 0) {
+                    uint16_t fanin_now = (uint16_t)(atomic_fetch_add_explicit(
+                                             &g_dispatch_fanin[s_idx], 1,
+                                             memory_order_acq_rel) +
+                                         1);
+                    atomic_fetch_add_explicit(&g_ed_late_arrival_cnt, 1, memory_order_relaxed);
+                    cutter_maybe_enter_staging(s_full, s_idx, fanin_now);
+                }
+                continue;
+            }
+
+            uint16_t successor_idx = g_successor_buf[p_idx].cnt;
+            g_successor_buf[p_idx].node[successor_idx] = s_full;
+            g_successor_buf[p_idx].cnt = successor_idx + 1;
+            g_state_buf[p_idx].successor_cnt++;
+
+            bool dispatched_this_gen =
+                atomic_load_explicit(&g_dispatch_tag[p_idx], memory_order_acquire) ==
+                (uint32_t)p_full;
+            ed_edge_unlock(p_idx);
+
+            if (!dispatched_this_gen) {
+                continue;
+            }
+
+            uint16_t fanin_now = (uint16_t)(atomic_fetch_add_explicit(
+                                     &g_dispatch_fanin[s_idx], 1,
+                                     memory_order_acq_rel) +
+                                 1);
+            atomic_fetch_add_explicit(&g_ed_late_arrival_cnt, 1, memory_order_relaxed);
+            cutter_maybe_enter_staging(s_full, s_idx, fanin_now);
+#else
+            uint16_t successor_idx = g_successor_buf[p_idx].cnt;
+            g_successor_buf[p_idx].node[successor_idx] = s_full;
+            g_successor_buf[p_idx].cnt = successor_idx + 1;
+            g_state_buf[p_idx].successor_cnt++;
+#endif
+        }
+
+        ptr->exp += original_cnt;
+        ptr->cnt = 0;
         g_commit_task_id++;
     }
 }

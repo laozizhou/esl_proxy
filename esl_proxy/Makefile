@@ -89,7 +89,7 @@ DEPS := $(OBJS:.o=.d)
 ORCH_STAMP := $(OBJ_DIR)/.orch-stamp
 ORCH_CONFIG := case=$(CASE) tier=$(QWEN3_SPMD_TIER) log=$(MAIN_LOG) ed=$(ED_ENABLE) ed_thr=$(ED_UNFIN_THRESHOLD)
 
-.PHONY: all run clean force test-tensormap test-ed-record test-step2 test-step3 test-cutter-window compile_commands
+.PHONY: all run clean force test-tensormap test-ed-record test-step2 test-step3 test-step4 test-cutter-window compile_commands
 
 compile_commands:
 	python3 ./tools/gen_compile_commands.py
@@ -140,12 +140,14 @@ test-step2: $(BIN_DIR)/test_step2_protocol
 $(BIN_DIR)/test_step2_protocol: tests/test_step2_protocol.c \
 	$(OBJ_DIR)/algorithm/dispatch.o \
 	$(OBJ_DIR)/algorithm/executor.o \
+	$(OBJ_DIR)/algorithm/cutter.o \
 	$(OBJ_DIR)/algorithm/shm.o \
 	$(OBJ_DIR)/algorithm/early_dispatch.o \
 	$(OBJ_DIR)/algorithm/log.o | $(BIN_DIR)
 	$(CC) $(CFLAGS) tests/test_step2_protocol.c \
 		$(OBJ_DIR)/algorithm/dispatch.o \
 		$(OBJ_DIR)/algorithm/executor.o \
+		$(OBJ_DIR)/algorithm/cutter.o \
 		$(OBJ_DIR)/algorithm/shm.o \
 		$(OBJ_DIR)/algorithm/early_dispatch.o \
 		$(OBJ_DIR)/algorithm/log.o -o $@ $(LDFLAGS)
@@ -165,6 +167,22 @@ $(BIN_DIR)/test_step3_next_block_idx: tests/test_step3_next_block_idx.c \
 	$(CC) $(CFLAGS) tests/test_step3_next_block_idx.c \
 		$(OBJ_DIR)/algorithm/dispatch.o \
 		$(OBJ_DIR)/algorithm/executor.o \
+		$(OBJ_DIR)/algorithm/shm.o \
+		$(OBJ_DIR)/algorithm/early_dispatch.o \
+		$(OBJ_DIR)/algorithm/log.o -o $@ $(LDFLAGS)
+
+# Step 4 Hook 0 + late-arrival 线性化回归：
+# 直接驱动 cutter::add_successors 与 propagate_dispatch_fanin，验证 fanin 贡献恰好一次。
+test-step4: $(BIN_DIR)/test_step4_hook0_late_arrival
+	$(BIN_DIR)/test_step4_hook0_late_arrival
+
+$(BIN_DIR)/test_step4_hook0_late_arrival: tests/test_step4_hook0_late_arrival.c \
+	$(OBJ_DIR)/algorithm/cutter.o \
+	$(OBJ_DIR)/algorithm/shm.o \
+	$(OBJ_DIR)/algorithm/early_dispatch.o \
+	$(OBJ_DIR)/algorithm/log.o | $(BIN_DIR)
+	$(CC) $(CFLAGS) tests/test_step4_hook0_late_arrival.c \
+		$(OBJ_DIR)/algorithm/cutter.o \
 		$(OBJ_DIR)/algorithm/shm.o \
 		$(OBJ_DIR)/algorithm/early_dispatch.o \
 		$(OBJ_DIR)/algorithm/log.o -o $@ $(LDFLAGS)
