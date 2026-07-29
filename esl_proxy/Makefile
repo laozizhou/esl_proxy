@@ -89,7 +89,7 @@ DEPS := $(OBJS:.o=.d)
 ORCH_STAMP := $(OBJ_DIR)/.orch-stamp
 ORCH_CONFIG := case=$(CASE) tier=$(QWEN3_SPMD_TIER) log=$(MAIN_LOG) ed=$(ED_ENABLE) ed_thr=$(ED_UNFIN_THRESHOLD)
 
-.PHONY: all run clean force test-tensormap test-ed-record test-step2 test-step3 test-step4 test-step5 test-step6 test-cutter-window compile_commands
+.PHONY: all run clean force test-tensormap test-ed-record test-step2 test-step3 test-step4 test-step5 test-step6 test-step7 test-cutter-window compile_commands
 
 compile_commands:
 	python3 ./tools/gen_compile_commands.py
@@ -215,6 +215,23 @@ $(BIN_DIR)/test_step6_hook1_notify_once: tests/test_step6_hook1_notify_once.c \
 	$(OBJ_DIR)/algorithm/log.o | $(BIN_DIR)
 	$(CC) $(CFLAGS) tests/test_step6_hook1_notify_once.c \
 		$(OBJ_DIR)/algorithm/cutter.o \
+		$(OBJ_DIR)/algorithm/dispatch.o \
+		$(OBJ_DIR)/algorithm/executor.o \
+		$(OBJ_DIR)/algorithm/shm.o \
+		$(OBJ_DIR)/algorithm/early_dispatch.o \
+		$(OBJ_DIR)/algorithm/log.o -o $@ $(LDFLAGS)
+
+# Step 7 race + ABA 回归：覆盖 Hook1/Hook2 两种通知先后，以及 ring 复用 stale notify 防护。
+test-step7: $(BIN_DIR)/test_step7_notify_race_aba
+	$(BIN_DIR)/test_step7_notify_race_aba
+
+$(BIN_DIR)/test_step7_notify_race_aba: tests/test_step7_notify_race_aba.c \
+	$(OBJ_DIR)/algorithm/dispatch.o \
+	$(OBJ_DIR)/algorithm/executor.o \
+	$(OBJ_DIR)/algorithm/shm.o \
+	$(OBJ_DIR)/algorithm/early_dispatch.o \
+	$(OBJ_DIR)/algorithm/log.o | $(BIN_DIR)
+	$(CC) $(CFLAGS) tests/test_step7_notify_race_aba.c \
 		$(OBJ_DIR)/algorithm/dispatch.o \
 		$(OBJ_DIR)/algorithm/executor.o \
 		$(OBJ_DIR)/algorithm/shm.o \

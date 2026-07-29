@@ -79,6 +79,7 @@ static void reset_runtime_state(void)
 static uint64_t stage_one_task(uint16_t task_id, task_type_t type)
 {
     uint16_t s_idx = (uint16_t)(task_id & RING_MASK);
+    ed_init_task_meta(task_id, 0);
     g_basic_buf[s_idx].type = type;
     g_basic_buf[s_idx].count = 1;
     g_basic_buf[s_idx].duration = 1;
@@ -226,6 +227,7 @@ static void test_step6_notify_once_deduplicates_cross_sources(void)
     const uint8_t type = TASK_TYPE_CUBE;
     uint64_t record = ED_PACK_RECORD(s, ED_PACK_SLOT(core, slot, type));
 
+    ed_init_task_meta(s, 0);
     atomic_store_explicit(&g_spec_state[s_idx], ED_SPEC_DISPATCHED, memory_order_release);
     atomic_store_explicit(&g_staged_slot_record[s_idx], record, memory_order_seq_cst);
     atomic_store_explicit(&g_executors[type][core].slot_state[slot], EXE_SLOT_GATED,

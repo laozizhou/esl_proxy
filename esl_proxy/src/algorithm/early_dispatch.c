@@ -201,6 +201,20 @@ void ed_notify_once(uint32_t task_id, uint64_t record, ed_notify_source_t source
 {
 #if ED_ENABLE
     uint16_t s_idx = (uint16_t)(task_id & RING_MASK);
+    /*
+     * Step 7 ABA 防护：
+     * 1) ring_task_tag 必须仍指向本代 task_id（拒绝旧代迟到通知）；
+     * 2) staged_slot_record 必须与调用方 record 完全一致（拒绝旧位置误放行）。
+     */
+    uint32_t live_tag = atomic_load_explicit(&g_ring_task_tag[s_idx], memory_order_acquire);
+    if (live_tag != task_id) {
+        return;
+    }
+    uint64_t live_record =
+        atomic_load_explicit(&g_staged_slot_record[s_idx], memory_order_seq_cst);
+    if (live_record != record) {
+        return;
+    }
     if (!ed_record_tag_matches(record, task_id)) {
         return;
     }
