@@ -82,7 +82,10 @@ void init_ctrl_t(void)
     }
 }
 
-static inline void set_mix(int tid)
+/* Kept for reference only and NOT called - see the explanation at the end of read_msgq()
+ * before re-enabling it. As written it clobbers the vector bitmap rather than a separate MIX
+ * one, which deadlocks the type-1 half of the DAG once a task spans more than one round. */
+__attribute__((unused)) static void set_mix(int tid)
 {
     for (int j = 0; j < AIC_OSTD; j++) {
         g_ctrl_t[tid].free_bitmap[TASK_TYPE_MIX][j] =
@@ -156,7 +159,28 @@ static inline void read_msgq(int tid)
             g_ctrl_t[tid].free_bitmap[i][j] |= g_ctrl_t[tid].msg_bitmap[i][j];
         }
     }
-    set_mix(tid);
+
+    /* set_mix() is deliberately not called.
+     *
+     * TASK_TYPE_MIX == TASK_TYPE_VECTOR == 1 (common/task.h), so it expands to
+     *     free_bitmap[1] = free_bitmap[0] & free_bitmap[1]
+     * i.e. it clobbers vector's own bitmap instead of maintaining a separate MIX one.
+     * Bits in free_bitmap[1] are only ever set by the msg_bitmap[1] merge above (or by the
+     * initial mask in init_ctrl_t), while set_mix() only clears. So a core busy with a
+     * type-0 task loses its type-1 bit as collateral, and the type-0 completion restores
+     * free_bitmap[0] alone - the type-1 bit never comes back.
+     *
+     * This is invisible today only because send_task() fakes completion in the same round it
+     * dispatches (#ifndef REAL_CHIP), so free_bitmap[0] is already restored by the time
+     * set_mix() runs and the AND is a no-op. The moment a task holds a core for more than one
+     * round, every core drifts out of type-1 eligibility and the type-1 half of the DAG
+     * (462 of 864 tasks) can never be dispatched.
+     *
+     * Dropping it costs nothing: the 60 mix tasks (out_proj) are encoded as type 1 in
+     * cases/qwen3_14b_decode_subgraph.h and are indistinguishable from cube tasks, so no
+     * dual-unit reservation is expressible either way. Real MIX semantics would need a third
+     * type value from the graph generator, TASK_TYPE_CNT raised to 3, and set_mix() rewritten
+     * against that separate index. */
 }
 
 static inline void get_completed(uint64_t* bitmap, uint32_t task_id[], int *complete_cnt,
