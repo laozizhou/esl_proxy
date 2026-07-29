@@ -6,7 +6,45 @@
 #include <stdio.h>
 
 #include "scheduler/painter.h"
+#include "scheduler/early_dispatch.h"
 #include "common/log.h"
+
+uint32_t g_early_st_pred[RING_SIZE];
+uint32_t g_early_hint[RING_SIZE];
+uint8_t g_early_type[RING_SIZE];
+uint32_t g_early_hints_published;
+
+/* Precompute the unique same-type predecessor of every task. This is a static property of the
+ * graph, so doing it once here means the runtime hook never has to walk a predecessor list, and
+ * in particular resolve_dep() - which only has a global task id and no local subgraph index -
+ * needs no id -> local-index map. */
+void early_dispatch_init(void)
+{
+    for (uint32_t i = 0; i < RING_SIZE; i++) {
+        g_early_st_pred[i] = EARLY_NONE;
+        g_early_hint[i] = EARLY_NONE;
+    }
+    for (int sg = 0; sg < PAINTER_THREAD_CNT; sg++) {
+        for (uint32_t i = 0; i < test_graph[sg].task_cnt; i++) {
+            g_early_type[test_graph[sg].task_id[i]] = (uint8_t)test_graph[sg].type[i];
+        }
+    }
+    for (int sg = 0; sg < PAINTER_THREAD_CNT; sg++) {
+        for (uint32_t i = 0; i < test_graph[sg].task_cnt; i++) {
+            uint32_t id = test_graph[sg].task_id[i];
+            uint32_t found = EARLY_NONE;
+            int n = 0;
+            for (int k = 0; k < test_graph[sg].pre_cnt[i]; k++) {
+                uint32_t q = (uint32_t)test_graph[sg].predecessors[test_graph[sg].pre_idx[i] + k];
+                if (g_early_type[q] == g_early_type[id]) {
+                    n++;
+                    found = q;
+                }
+            }
+            g_early_st_pred[id] = (n == 1) ? found : EARLY_NONE;
+        }
+    }
+}
 
 task_state* g_state_buf[PAINTER_THREAD_CNT];
 uint32_t commit_task_id[PAINTER_THREAD_CNT] = {0, 0};
@@ -30,6 +68,32 @@ extern ctrl_t g_ctrl_t[DISPATCH_THREAD_CNT];
 extern atomic_bool g_is_done;
 uint32_t  g_predecessor_cnt[RING_SIZE];
 uint32_t completed_task_cnt = 0;
+
+/* Publish a hint when S's live indegree is 1 and the single remaining unfinished predecessor is
+ * its same-type one.
+ *
+ * The identity test is cheap thanks to g_early_st_pred: if S has exactly one same-type
+ * predecessor P and S's live indegree is 1, then the single remaining unfinished predecessor is P
+ * precisely when P is not COMPLETED. Any other survivor would be cross-type and rejected by the
+ * same-type rule anyway, so there is no need to walk the predecessor list at runtime.
+ *
+ * Called from BOTH the decrement site and the commit site. The commit site is not redundant: a
+ * task in a pure chain (A <- B <- C <- D) has exactly one predecessor, so its indegree is 1 from
+ * initialisation and never transitions to 1. Hooking only the decrement site would silently miss
+ * every pure chain. */
+static inline void early_publish_hint(int tid, uint32_t s)
+{
+    uint32_t p = g_early_st_pred[s];
+    if (p == EARLY_NONE) {
+        return;                          /* no same-type predecessor, or more than one */
+    }
+    if (g_state_buf[tid][p].state == TASK_STATUS_COMPLETED) {
+        return;                          /* the survivor is some other, cross-type, predecessor */
+    }
+    g_early_hint[p] = s;
+    g_early_hints_published++;
+    WORKER_LOGF("early,hint,successor,%u,predecessor,%u", s, p);
+}
 
 static inline bool update_task_state(int tid, uint32_t cnt, uint32_t* cq_buf)
 {
@@ -103,6 +167,12 @@ void add_successors(int tid, uint32_t ready_cnt[], uint32_t rq_buf[][RQ_BATCH_SI
             ready_cnt[type]++;
             WORKER_LOGF("ready,type,%d,cnt,%d",type, ready_cnt[type]);
         }
+        else if (predecessor_cnt == 1)
+        {
+            /* Indegree is 1 at commit time, so it will never transition to 1 later - this is the
+             * only chance to publish. Every task in a pure chain lands here. */
+            early_publish_hint(tid, id);
+        }
         commited_idx++;
     }
     commit_task_id[tid] = commited_idx;
@@ -137,6 +207,10 @@ void resolve_dep(int tid, uint32_t cnt, uint32_t* cq_buf, uint32_t rq_buf[][RQ_B
             succ_id = g_successor_buf[tid][idx].node[k];
             g_predecessor_cnt[succ_id & RING_MASK]--;
             WORKER_LOGF("painter,task_id,%u,successor_id,%u,predecessor_cnt,%u", task_id, succ_id, g_predecessor_cnt[succ_id & RING_MASK]);
+            if (g_predecessor_cnt[succ_id & RING_MASK] == 1) {
+                /* Just became almost-ready: exactly one unfinished predecessor left. */
+                early_publish_hint(tid, succ_id);
+            }
             if (g_predecessor_cnt[succ_id & RING_MASK] < 1) {
                 task_type_t type = g_state_buf[tid][succ_id].type;
                 rq_buf[type][ready_cnt[type]] = succ_id;

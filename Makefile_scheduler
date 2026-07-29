@@ -12,6 +12,16 @@ CFLAGS   := -g -std=c11 -Wall -O2 \
             -D_GNU_SOURCE \
             -DWORKER_LOG=1 -DLOG_OUTPUT_MODE=0
 
+# EARLY_DISPATCH=1 enables Case B (plant a successor behind an already-executing predecessor).
+# EARLY_DISPATCH_CASE_A=1 additionally enables Case A (co-dispatch onto a fully idle core).
+# Both off by default, so the baseline is reachable for comparison and as a negative control.
+ifeq ($(EARLY_DISPATCH),1)
+CFLAGS   += -DEARLY_DISPATCH
+endif
+ifeq ($(EARLY_DISPATCH_CASE_A),1)
+CFLAGS   += -DEARLY_DISPATCH -DEARLY_DISPATCH_CASE_A
+endif
+
 # SIM_LATENCY=1 replaces the fake return (task retires the round after it is sent) with an
 # in-order 2-slot arbiter that holds a core for SIM_TICKS rounds. Required to observe any
 # multi-round behaviour, including early dispatch. SIM_TICKS overrides the default duration.

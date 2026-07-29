@@ -13,6 +13,7 @@
 #include "scheduler/conf.h"
 #include "scheduler/painter.h"
 #include "scheduler/dispatch.h"
+#include "scheduler/early_dispatch.h"
 #include "common/log.h"
 
 /* Global variable definitions needed by dispatch.c and painter.c */
@@ -47,6 +48,7 @@ int main(void) {
     buf_init();
     init_state_buf();
     init_ctrl_t();
+    early_dispatch_init();
     WORKER_LOGF("painter_cnt,%d,dispatcher_cnt,%d", PAINTER_THREAD_CNT, DISPATCH_THREAD_CNT);
     /* Register signal handlers for graceful shutdown on Ctrl+C */
     signal(SIGINT, handle_signal);
@@ -83,6 +85,8 @@ int main(void) {
     uint64_t end_ns = get_time_ns();
     uint64_t duration = end_ns - start_ns;
     WORKER_LOGF("scheduler_duration,%lld/ns", duration);
+    printf("[scheduler] duration = %llu ns\n", (unsigned long long)duration);
+    int failures = early_dispatch_report();
     log_close();
-    return 0;
+    return failures == 0 ? 0 : 1;
 }

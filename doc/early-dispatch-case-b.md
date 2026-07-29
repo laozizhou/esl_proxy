@@ -108,15 +108,31 @@ C 退休 → B 在 slot0 启动, slot1 空出 → 把 A 排进 slot1
 | 文件 | 改动 |
 |---|---|
 | `src/scheduler/dispatch.c` | `send_task`:`free_bitmap[t][0] \| free_bitmap[t][1]`(双 outstanding);容量 `popcount(fb[0]) + popcount(fb[1])`;保留 slot0 优先 |
-| | 新增 `plant_pass()`,在 `dispatch()` 中于 `read_msgq()` **之后**、`push_2_completed_queue()` **之前**调用 |
+| | 新增 `plant_pass()`,在 `dispatch()` 中于 `read_msgq()` 和 `push_2_completed_queue()` **两者之后**调用 |
 | | send 点的 `g_dispatched[]` 检查与置位 |
 | | 延迟模型(§9)替换假完成 |
 | `src/scheduler/painter.c` | 递减点 + 提交点两处发布 `g_hint[P] = S`,带同类型过滤 |
 | `include/scheduler/dispatch.h` | `ctrl_t` 上的计数器 |
 | `Makefile_scheduler` | `-DEARLY_DISPATCH` / `-DSIM_LATENCY` |
 
-`plant_pass()` 的位置是**承重的**:在 `read_msgq()` 之后,`free_bitmap` 才反映本轮完成;在
-`push_2_completed_queue()` 之前,预排才一定 happens-before 本轮观察到的任何完成的入队。
+`plant_pass()` 的位置**双向承重**,放错会静默挂死:
+
+- 必须在 `read_msgq()` **之后** —— 否则 `free_bitmap` 还没反映本轮完成,看不到刚空出的槽。
+- 必须在 `push_2_completed_queue()` **之后** —— `place_task()` 会覆盖它填入那个槽的
+  `task_id_map` 条目,而 `push_2_completed_queue()` 正是靠这个条目把完成位图反查成 task id。
+
+第二条是实测踩出来的坑,不是推演。先放置再排空完成时,现场是这样:
+
+```
+核4 槽0 上的任务 261 退休 → read_msgq 把槽标回空闲
+plant_pass 看到槽0 空 → 放入 126, 覆盖 task_id_map1[0][4] = 126
+push_2_completed_queue 反查该槽的完成 → 读到 126 而不是 261
+  ⇒ 261 的完成永不上报 → 入度永不归零 → DAG 挂死
+  ⇒ 126 被虚假上报完成(其实还没跑), later 经 ready_queue 到达时被误判为重复
+```
+
+症状是**间歇性**的(15 次里挂 1~2 次),因为它要求"退休"和"预排"落在同一轮同一个槽上。完成一旦排空,
+被释放槽的映射条目就是死数据,覆盖才安全。
 
 ## 7. 不变式
 
@@ -193,6 +209,18 @@ P 占一个槽、一个核只有一个兄弟槽 ⇒ 每个 P 最多带一个后�
 
 所以这是**机制建设,不是本 workload 的吞吐优化**。天花板是本 DAG 在不变式 3 下的性质,不是这个
 想法的性质。正确性验证应当用专门构造的微型 DAG(含长同类型链),而不是依赖这 6 个偶然机会。
+
+**实测与静态预测精确吻合**(`EARLY_DISPATCH=1 SIM_LATENCY=1 SIM_TICKS=4`,15/15 次运行一致):
+
+```
+hints_published    = 90     ← 静态算出的 90 个存活配对
+plants_case_b      = 6      ← 天花板 6, 6 个 hub 各带一个
+skipped_duplicate  = 6      ← 被预排的任务经 ready_queue 到达时去重
+ordering_pairs     = 6 checked, 0 failed
+dispatched_tasks   = 864    ← 不多不少
+completed_task_cnt = 864
+负对照(EARLY_DISPATCH 关闭) = 0 次预排, 仍 864
+```
 
 ## 11. 本特性暴露于的既有缺陷
 
