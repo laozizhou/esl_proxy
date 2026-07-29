@@ -2,6 +2,7 @@
 #include "early_dispatch.h"
 #include "log.h"
 #include "ring_buf.h"
+#include <assert.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -225,10 +226,28 @@ void resolve_dep(uint16_t cnt, uint16_t* cq_buf, uint16_t rq_buf[][RQ_BATCH_SIZE
         WORKER_LOGF("completed,task_id,%u,type,%u, successor_cnt,%u", task_id, g_basic_buf[idx].type, succ_cnt);
         for (uint16_t k = 0; k < succ_cnt; k++) {
             succ_id = g_successor_buf[idx].node[k];
-            g_predecessor_cnt[succ_id & RING_MASK]--;
-            WORKER_LOGF("cutter, task_id,%u, successor_id,%u, predecessor_cnt,%u", task_id, succ_id, g_predecessor_cnt[succ_id & RING_MASK]);
-            if (g_predecessor_cnt[succ_id & RING_MASK] < 1) {
-                task_type_t type = g_basic_buf[succ_id].type;
+            uint16_t s_idx = (uint16_t)(succ_id & RING_MASK);
+            g_predecessor_cnt[s_idx]--;
+#if ED_ENABLE
+            uint16_t old_unfin = atomic_fetch_sub_explicit(
+                &g_unfin_pred_cnt[s_idx], 1, memory_order_acq_rel);
+            assert(old_unfin > 0);
+#endif
+            WORKER_LOGF("cutter, task_id,%u, successor_id,%u, predecessor_cnt,%u", task_id, succ_id, g_predecessor_cnt[s_idx]);
+            if (g_predecessor_cnt[s_idx] < 1) {
+                task_type_t type = g_basic_buf[s_idx].type;
+#if ED_ENABLE
+                /*
+                 * Step 5 Hook 2：只有观察到 unfin 1->0 的线程有 release 权限。
+                 * 这里先把 spec_state 统一切到 DISPATCHED；doorbell 延后到 Step 6。
+                 */
+                assert(old_unfin == 1);
+                uint8_t old = atomic_exchange_explicit(
+                    &g_spec_state[s_idx], ED_SPEC_DISPATCHED, memory_order_seq_cst);
+                if (old == ED_SPEC_DISPATCHED) {
+                    WORKER_LOGF("[ed] BUG: Hook2 fired twice for s=%u", succ_id);
+                }
+#endif
                 rq_buf[type][ready_cnt[type]] = succ_id;
                 ready_cnt[type]++;
                 WORKER_LOGF("ready_cnt[%d],%d",type, ready_cnt[type]);
