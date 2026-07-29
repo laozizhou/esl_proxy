@@ -137,6 +137,91 @@ static void hand_shake(int cpu_idx, uint64_t* aicore_spr[], int type, int ostd2_
     }
 }
 
+#if defined(SIM_LATENCY) && !defined(REAL_CHIP)
+/* ---------------------------------------------------------------------------
+ * Simulated AICore execution.
+ *
+ * The default build fakes completion inside send_task(): msg_bitmap is set in the same round
+ * the task is dispatched, so a task is resident for less than one dispatch round. That makes
+ * every multi-round property of the hardware unobservable - in particular a core is never
+ * found with one busy slot and one free slot, which is the precondition for planting a
+ * successor behind a resident predecessor. This model replaces that fake return with a
+ * per (exe_type, core) in-order arbiter over the AIC_OSTD slots:
+ *
+ *   - pick the slot the phase pointer addresses; if empty, pick its sibling
+ *   - decrement that slot's tick counter, and only on reaching zero set msg_bitmap and free it
+ *   - flip the phase pointer after a retirement, so the sibling slot is examined next
+ *   - reset the phase pointer to slot 0 whenever both slots are empty
+ *
+ * The last two rules are the hardware model early dispatch is designed against: alternate while
+ * busy, favour slot 0 from idle.
+ *
+ * Ticked synchronously from dispatch(), by the thread that owns the ctrl_t. It must NOT become a
+ * separate thread or timer: msg_bitmap is a plain uint64_t and get_completed() clears bits with a
+ * non-atomic read-modify-write, so a concurrent setter would have completions silently dropped.
+ *
+ * Limitation: every task gets the same SIM_TICKS duration. Real per-task durations live in
+ * test_graph[].duration, which painter has and dispatch does not. That is fine for reachability
+ * and for the ordering oracle below, but it means this model must not be used to argue about
+ * makespan - see doc/early-dispatch-case-b.md section 9.
+ * ------------------------------------------------------------------------- */
+#ifndef SIM_TICKS
+#define SIM_TICKS 4
+#endif
+
+typedef struct {
+    uint32_t task_id;
+    uint16_t remaining;
+    uint8_t occupied;
+    uint8_t started;
+} sim_slot_t;
+
+static sim_slot_t g_sim[DISPATCH_THREAD_CNT][EXE_TYPE_CNT][AIC_CNT][AIC_OSTD];
+static uint8_t g_sim_next[DISPATCH_THREAD_CNT][EXE_TYPE_CNT][AIC_CNT];
+static uint64_t g_sim_now[DISPATCH_THREAD_CNT];
+
+/* Ordering oracle. Written only by the simulator, i.e. only by the owning dispatch thread, so
+ * an assertion over these is sound where reading g_state_buf would be racy and lagging. */
+uint64_t g_sim_start[RING_SIZE];
+uint64_t g_sim_retire[RING_SIZE];
+
+static inline void sim_place(int tid, int type, int core, int slot, uint32_t task_id)
+{
+    sim_slot_t *s = &g_sim[tid][type][core][slot];
+    s->task_id = task_id;
+    s->remaining = SIM_TICKS;
+    s->occupied = 1;
+    s->started = 0;
+}
+
+static void sim_tick(int tid)
+{
+    g_sim_now[tid]++;
+    for (int type = 0; type < EXE_TYPE_CNT; type++) {
+        for (int core = 0; core < AIC_CNT_PER_THREAD; core++) {
+            sim_slot_t *s = g_sim[tid][type][core];
+            uint8_t n = g_sim_next[tid][type][core];
+            int run = s[n].occupied ? n : (s[n ^ 1].occupied ? (n ^ 1) : -1);
+            if (run < 0) {
+                g_sim_next[tid][type][core] = 0; /* idle resets the phase pointer */
+                continue;
+            }
+            if (!s[run].started) {
+                s[run].started = 1;
+                g_sim_start[s[run].task_id] = g_sim_now[tid];
+            }
+            if (--s[run].remaining == 0) {
+                g_sim_retire[s[run].task_id] = g_sim_now[tid];
+                s[run].occupied = 0;
+                s[run].started = 0;
+                g_ctrl_t[tid].msg_bitmap[type][run] |= (uint64_t)0x1 << core;
+                g_sim_next[tid][type][core] = run ^ 1; /* examine the sibling next */
+            }
+        }
+    }
+}
+#endif /* SIM_LATENCY && !REAL_CHIP */
+
 static inline void read_msgq(int tid)
 {
     #ifdef REAL_CHIP
@@ -265,9 +350,13 @@ static inline int send_task(ctrl_t *ctrl, int type)
         ctrl->free_bitmap[type][slot] &= ~mask;
 
         #ifndef REAL_CHIP
-        ctrl->msg_bitmap[type][slot] |= mask;
+        #ifdef SIM_LATENCY
+        sim_place((int)ctrl->tid, type, core, slot, task_id);
+        #else
+        ctrl->msg_bitmap[type][slot] |= mask;   /* fake return: retires next round */
         #endif
-        
+        #endif
+
         WORKER_LOGF("send,task_id,%u,core,%d,slot,%d,type,%d", task_id, core, slot, type);
         sent++;
         free_bitmap &= ~mask;
@@ -278,6 +367,11 @@ static inline int send_task(ctrl_t *ctrl, int type)
 int dispatch(int tid)
 {
     int total_sent = 0;
+#if defined(SIM_LATENCY) && !defined(REAL_CHIP)
+    /* Advance the simulated cores before observing them. Must run in this thread - see the
+     * comment on sim_tick(). */
+    sim_tick(tid);
+#endif
     read_msgq(tid);
     push_2_completed_queue(tid);
     total_sent += send_task(&g_ctrl_t[tid], TASK_TYPE_MIX);
