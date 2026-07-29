@@ -14,6 +14,10 @@
 #include <stdint.h>
 #include <string.h>
 
+#if ED_ENABLE
+#define ED_DRAIN_MAX_PER_ROUND 16
+#endif
+
 extern atomic_int g_task_id;
 extern atomic_bool g_orch_is_done;
 extern atomic_int g_completed_cnt;
@@ -259,6 +263,14 @@ int dispatch(int tid)
     total_sent += send_task(&g_ctrl_t[tid], TASK_TYPE_MIX);
     total_sent += send_task(&g_ctrl_t[tid], TASK_TYPE_VECTOR);
     total_sent += send_task(&g_ctrl_t[tid], TASK_TYPE_CUBE);
+#if ED_ENABLE
+    for (int k = 0; k < ED_DRAIN_MAX_PER_ROUND; k++) {
+        if (try_early_dispatch(tid) == 0) {
+            break;
+        }
+        total_sent++;
+    }
+#endif
     return total_sent;
 }
 

@@ -8,8 +8,12 @@
 
 #include "early_dispatch.h"
 
+#include <assert.h>
+#include <stdlib.h>
 #include <string.h>
 
+#include "dispatch.h"
+#include "executor.h"
 #include "log.h"
 #include "ring_buf.h"
 #include "spin.h"
@@ -195,12 +199,50 @@ void ed_init(void)
 /* Step 6 接入；Step 1 空实现 */
 void ed_notify_once(uint32_t task_id, uint64_t record, ed_notify_source_t source)
 {
+#if ED_ENABLE
+    uint16_t s_idx = (uint16_t)(task_id & RING_MASK);
+    if (!ed_record_tag_matches(record, task_id)) {
+        return;
+    }
+
+    uint32_t packed = ED_RECORD_SLOT(record);
+    uint16_t core = ED_UNPACK_CORE(packed);
+    uint8_t slot = ED_UNPACK_SLOT(packed);
+    uint8_t type = ED_UNPACK_TYPE(packed);
+    if (core >= AIC_CNT || slot >= AIC_OSTD || type >= EXE_TYPE_CNT) {
+        return;
+    }
+
+    uint8_t expected_claim = 0;
+    if (!atomic_compare_exchange_strong_explicit(
+            &g_notify_claimed[s_idx], &expected_claim, 1,
+            memory_order_acq_rel, memory_order_acquire)) {
+        return;
+    }
+
+    uint8_t expected_state = EXE_SLOT_GATED;
+    if (!atomic_compare_exchange_strong_explicit(
+            &g_executors[type][core].slot_state[slot], &expected_state,
+            EXE_SLOT_RUNNABLE, memory_order_acq_rel, memory_order_acquire)) {
+        return;
+    }
+
+    atomic_store_explicit(&g_executors[type][core].doorbell[slot], 1, memory_order_release);
+    if (source == ED_NOTIFY_HOOK2) {
+        atomic_fetch_add_explicit(&g_ed_hit_cnt, 1, memory_order_relaxed);
+    } else {
+        atomic_fetch_add_explicit(&g_ed_self_notify_cnt, 1, memory_order_relaxed);
+    }
+#else
     (void)task_id;
     (void)record;
     (void)source;
+#endif
 }
 
 #if ED_ENABLE
+static __thread unsigned int s_ed_rand_seed;
+
 static inline void ed_enqueue_or_abandon(uint16_t task_id)
 {
     if (enqueue(&g_ed_ready_queue, task_id)) {
@@ -232,7 +274,6 @@ static inline void ed_maybe_enter_staging(uint16_t s_id, uint16_t s_idx, uint16_
     if (atomic_compare_exchange_strong_explicit(
             &g_spec_state[s_idx], &expected, ED_SPEC_STAGING,
             memory_order_acq_rel, memory_order_relaxed)) {
-        atomic_fetch_add_explicit(&g_ed_stage_cnt, 1, memory_order_relaxed);
         ed_enqueue_or_abandon(s_id);
     }
 }
@@ -270,9 +311,139 @@ void propagate_dispatch_fanin(uint16_t p_id)
     ed_edge_unlock(p_idx);
 }
 
+static int pick_stage_core(int tid, uint16_t s_id, task_type_t type, int *out_slot)
+{
+    uint16_t s_idx = (uint16_t)(s_id & RING_MASK);
+    uint64_t pcore_bitmap = 0;
+    ed_pred_snapshot_t *snap = &g_ed_pred_snapshot[s_idx];
+    for (uint16_t k = 0; k < snap->cnt; k++) {
+        uint16_t p_id = snap->node[k];
+        uint16_t p_idx = (uint16_t)(p_id & RING_MASK);
+        if (g_state_buf != NULL &&
+            g_state_buf[p_idx].state == TASK_STATUS_COMPLETED) {
+            continue;
+        }
+
+        uint64_t record = ed_task_dispatch_record_load(p_id);
+        if (!ed_record_tag_matches(record, p_id)) {
+            continue;
+        }
+
+        uint32_t packed = ED_RECORD_SLOT(record);
+        if ((task_type_t)ED_UNPACK_TYPE(packed) != type) {
+            continue;
+        }
+        uint16_t core = ED_UNPACK_CORE(packed);
+        if (core >= AIC_CNT) {
+            continue;
+        }
+        pcore_bitmap |= ((uint64_t)1u << core);
+    }
+
+    uint64_t free0 = atomic_load_explicit(&g_ctrl_t[tid].free_bitmap[type][0],
+                                          memory_order_acquire);
+    uint64_t free1 = atomic_load_explicit(&g_ctrl_t[tid].free_bitmap[type][1],
+                                          memory_order_acquire);
+    uint64_t free_any = free0 | free1;
+    uint64_t candidate = pcore_bitmap & free_any;
+    if (candidate == 0) {
+        candidate = free_any;
+    }
+    if (candidate == 0) {
+        return -1;
+    }
+
+    if (s_ed_rand_seed == 0) {
+        s_ed_rand_seed = ((unsigned int)tid + 1u) ^ ((unsigned int)s_id << 8);
+        if (s_ed_rand_seed == 0) {
+            s_ed_rand_seed = 1u;
+        }
+    }
+    int popcnt = __builtin_popcountll(candidate);
+    int nth = (int)(rand_r(&s_ed_rand_seed) % (unsigned int)popcnt);
+    int core = pick_nth_bit(candidate, nth);
+    uint64_t mask = (uint64_t)1u << (uint64_t)core;
+    *out_slot = (free0 & mask) != 0 ? 0 : 1;
+    return core;
+}
+
 int try_early_dispatch(int tid)
 {
-    (void)tid;
+    uint16_t s_id = 0;
+    if (!dequeue(&g_ed_ready_queue, &s_id)) {
+        return 0;
+    }
+
+    uint16_t s_idx = (uint16_t)(s_id & RING_MASK);
+    if (atomic_load_explicit(&g_spec_state[s_idx], memory_order_seq_cst) !=
+        ED_SPEC_STAGING) {
+        return 0;
+    }
+
+    if (g_basic_buf[s_idx].count != 1) {
+        return 0;
+    }
+
+    task_type_t type = g_basic_buf[s_idx].type;
+    int slot = -1;
+    int core = pick_stage_core(tid, s_id, type, &slot);
+    if (core < 0) {
+        goto re_push_slot_busy;
+    }
+
+    uint64_t core_mask = (uint64_t)1u << (uint64_t)core;
+    uint64_t old_bm = atomic_fetch_and_explicit(
+        &g_ctrl_t[tid].free_bitmap[type][slot], ~core_mask, memory_order_acq_rel);
+    if ((old_bm & core_mask) == 0) {
+        goto re_push_slot_busy;
+    }
+
+    uint16_t expected_blk = 0;
+    if (!atomic_compare_exchange_strong_explicit(
+            &g_next_block_idx[s_idx], &expected_blk, 1, memory_order_acq_rel,
+            memory_order_relaxed)) {
+        atomic_fetch_or_explicit(&g_ctrl_t[tid].free_bitmap[type][slot], core_mask,
+                                 memory_order_release);
+        atomic_fetch_add_explicit(&g_ed_block_cas_fail_cnt, 1, memory_order_relaxed);
+        return 0;
+    }
+
+    assert(atomic_load_explicit(&g_executors[type][core].slot_state[slot],
+                                memory_order_acquire) == EXE_SLOT_EMPTY);
+    atomic_store_explicit(&g_executors[type][core].doorbell[slot], 0,
+                          memory_order_relaxed);
+    g_executors[type][core].tasks[slot] = s_id;
+    g_executors[type][core].block_idx[slot] = 0;
+    uint32_t raw_duration = g_basic_buf[s_idx].duration;
+    g_executors[type][core].duration[slot] =
+        (raw_duration > 10000) ? (uint16_t)(raw_duration / 10000) : 1;
+    if (slot == 1) {
+        g_ctrl_t[tid].task_id_map2[type][core] = s_id;
+    } else {
+        g_ctrl_t[tid].task_id_map1[type][core] = s_id;
+    }
+    atomic_store_explicit(&g_executors[type][core].slot_state[slot],
+                          EXE_SLOT_GATED, memory_order_release);
+
+    uint32_t packed = ED_PACK_SLOT((uint16_t)core, (uint8_t)slot, (uint8_t)type);
+    uint64_t record = ED_PACK_RECORD((uint32_t)s_id, packed);
+    atomic_store_explicit(&g_staged_slot_record[s_idx], record, memory_order_seq_cst);
+    atomic_fetch_add_explicit(&g_ed_stage_cnt, 1, memory_order_relaxed);
+
+    if (atomic_load_explicit(&g_spec_state[s_idx], memory_order_seq_cst) ==
+        ED_SPEC_DISPATCHED) {
+        ed_notify_once(s_id, record, ED_NOTIFY_HOOK1);
+    }
+    return 1;
+
+re_push_slot_busy:
+    if (!enqueue(&g_ed_ready_queue, s_id)) {
+        uint8_t expected = ED_SPEC_STAGING;
+        (void)atomic_compare_exchange_strong_explicit(
+            &g_spec_state[s_idx], &expected, ED_SPEC_NONE, memory_order_acq_rel,
+            memory_order_acquire);
+    }
+    atomic_fetch_add_explicit(&g_ed_slot_retry_cnt, 1, memory_order_relaxed);
     return 0;
 }
 #endif

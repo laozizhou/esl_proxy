@@ -70,7 +70,6 @@ static inline void cutter_maybe_enter_staging(uint16_t s_full, uint16_t s_idx, u
     if (atomic_compare_exchange_strong_explicit(
             &g_spec_state[s_idx], &expected, ED_SPEC_STAGING,
             memory_order_acq_rel, memory_order_relaxed)) {
-        atomic_fetch_add_explicit(&g_ed_stage_cnt, 1, memory_order_relaxed);
         if (!enqueue(&g_ed_ready_queue, s_full)) {
             uint8_t staged = ED_SPEC_STAGING;
             (void)atomic_compare_exchange_strong_explicit(
@@ -237,14 +236,18 @@ void resolve_dep(uint16_t cnt, uint16_t* cq_buf, uint16_t rq_buf[][RQ_BATCH_SIZE
             if (g_predecessor_cnt[s_idx] < 1) {
                 task_type_t type = g_basic_buf[s_idx].type;
 #if ED_ENABLE
-                /*
-                 * Step 5 Hook 2：只有观察到 unfin 1->0 的线程有 release 权限。
-                 * 这里先把 spec_state 统一切到 DISPATCHED；doorbell 延后到 Step 6。
-                 */
+                /* Step 6 Hook 2：1->0 线程统一切到 DISPATCHED，并通过 notify_once 竞争唯一通知。 */
                 assert(old_unfin == 1);
                 uint8_t old = atomic_exchange_explicit(
                     &g_spec_state[s_idx], ED_SPEC_DISPATCHED, memory_order_seq_cst);
-                if (old == ED_SPEC_DISPATCHED) {
+                if (old == ED_SPEC_STAGING) {
+                    uint64_t record = atomic_load_explicit(&g_staged_slot_record[s_idx],
+                                                           memory_order_seq_cst);
+                    if (ed_record_tag_matches(record, succ_id) &&
+                        ED_UNPACK_CORE(ED_RECORD_SLOT(record)) != ED_STAGED_CORE_INVALID) {
+                        ed_notify_once(succ_id, record, ED_NOTIFY_HOOK2);
+                    }
+                } else if (old == ED_SPEC_DISPATCHED) {
                     WORKER_LOGF("[ed] BUG: Hook2 fired twice for s=%u", succ_id);
                 }
 #endif
