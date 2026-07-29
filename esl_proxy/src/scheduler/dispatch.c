@@ -240,6 +240,16 @@ static void sim_tick(int tid)
                 s[run].started = 0;
                 g_ctrl_t[tid].msg_bitmap[type][run] |= (uint64_t)0x1 << core;
                 g_sim_next[tid][type][core] = run ^ 1; /* examine the sibling next */
+                if (!s[0].occupied && !s[1].occupied) {
+                    /* That retirement emptied the core, so the phase pointer resets to slot 0 NOW,
+                     * not on the next arbitration cycle. The distinction is load-bearing for Case
+                     * A and the ordering assertion caught it: dispatch can observe a core as fully
+                     * idle and co-dispatch into both slots within the same round the last task
+                     * retired. If the pointer were still addressing the sibling at that moment,
+                     * the successor in the higher slot would be examined first and would run
+                     * before its own predecessor. See doc/early-dispatch-case-a.md section 3. */
+                    g_sim_next[tid][type][core] = 0;
+                }
             }
         }
     }
@@ -452,10 +462,50 @@ static inline int send_task(ctrl_t *ctrl, int type)
         int slot = (ctrl->free_bitmap[type][0] & mask) != 0 ? 0 : 1;
         int core = (int)idx;
 
+#ifdef EARLY_DISPATCH_CASE_A
+        /* Case A: this task is about to be placed, and if the core is FULLY idle its sibling slot
+         * is free too, so a successor waiting only on this task can ride along in the same round.
+         *
+         * Readiness of the predecessor is implied by construction here - it came out of
+         * ready_queue, so its indegree is 0. That is the whole reason the hint is consumed at this
+         * point rather than re-derived: "not yet dispatched" is NOT the same as "ready" (in chain
+         * X -> A -> B with X unfinished, both A and B have one unfinished predecessor and A is
+         * undispatched, but A must not run yet).
+         *
+         * Ordering rests on the predecessor taking the LOWER slot: an idle core examines slot 0
+         * first, so writing P to slot 0 and S to slot 1 is correct both under a phase pointer that
+         * resets to 0 on idle and under a plain lowest-index-first arbiter. Since slot is chosen
+         * with a slot-0 preference above, a fully idle core always yields slot == 0 here. */
+        int idle = (ctrl->free_bitmap[type][0] & mask) != 0 && (ctrl->free_bitmap[type][1] & mask) != 0;
+        uint32_t hint_s = EARLY_NONE;
+        if (idle && slot == 0) {
+            hint_s = g_early_hint[task_id];
+            if (hint_s != EARLY_NONE) {
+                g_early_hint[task_id] = EARLY_NONE;   /* consume once, win or lose */
+                if (g_early_dispatched[hint_s]) {
+                    g_early_skipped_dup++;
+                    hint_s = EARLY_NONE;
+                }
+            }
+        }
+#endif
+
         place_task(ctrl, type, core, slot, task_id);
 
         WORKER_LOGF("send,task_id,%u,core,%d,slot,%d,type,%d", task_id, core, slot, type);
         sent++;
+
+#ifdef EARLY_DISPATCH_CASE_A
+        if (hint_s != EARLY_NONE) {
+            /* Second write, higher slot, after the predecessor's - the order matters and under
+             * REAL_CHIP these are MMIO stores that must not be reordered. */
+            place_task(ctrl, type, core, 1, hint_s);
+            early_record_plant(task_id, hint_s);
+            g_early_plants_a++;
+            WORKER_LOGF("early,plant_a,successor,%u,predecessor,%u,core,%d,slot,1",
+                        hint_s, task_id, core);
+        }
+#endif
         free_bitmap &= ~mask;
     }
     return sent;
