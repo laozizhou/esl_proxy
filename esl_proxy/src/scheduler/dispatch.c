@@ -213,8 +213,18 @@ static inline void push_2_completed_queue(int tid)
 
 static inline int send_task(ctrl_t *ctrl, int type)
 {
-    // Check both slots - slot is free if neither slot 0 nor slot 1 has been sent a task
-    uint64_t free_bitmap = ctrl->free_bitmap[type][0] & ctrl->free_bitmap[type][1];
+    /* A core is a candidate when EITHER of its AIC_OSTD slots is free, so a task can be queued
+     * behind one that is still executing. With '&' here a core was only ever selected while both
+     * slots were free, which made slot 1 unreachable and capped every core at one outstanding
+     * task - and it is exactly that queueing that early dispatch needs, because a successor can
+     * only be planted behind a predecessor that is already resident.
+     *
+     * cnt must equal the number of tasks the loop below can actually place. That loop drops the
+     * whole core from free_bitmap after placing one task, so the bound is popcount of the OR,
+     * not the sum of the two popcounts: asking batch_dequeue for more would hand back tasks the
+     * loop cannot place and then call __builtin_ctzll(0), whose result is undefined. A core with
+     * both slots free therefore takes one task this round and the second one next round. */
+    uint64_t free_bitmap = ctrl->free_bitmap[type][0] | ctrl->free_bitmap[type][1];
     int cnt = __builtin_popcountll(free_bitmap);
     if (cnt <= 0) {
         WORKER_LOGF("send,free_cnt,%d", cnt);
@@ -231,7 +241,10 @@ static inline int send_task(ctrl_t *ctrl, int type)
         uint64_t idx = (uint64_t)__builtin_ctzll(free_bitmap);
 
         uint64_t mask = (uint64_t)0x1 << idx;
-        // Determine which slot to use - prefer slot 0 if it's not busy
+        /* Prefer slot 0. This is load-bearing, not cosmetic: on an idle core the AICore examines
+         * slot 0 first, so filling slot 0 before slot 1 makes the software fill order agree with
+         * the hardware pickup order, and a task queued behind a resident one always lands in the
+         * higher slot. Early dispatch Case A depends on the predecessor occupying the lower slot. */
         int slot = (ctrl->free_bitmap[type][0] & mask) != 0 ? 0 : 1;
         // Set executor's tasks and duration
         int core = (int)idx;
