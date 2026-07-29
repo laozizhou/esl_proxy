@@ -125,21 +125,31 @@ void log_write(const char *file, int line, const char *fmt, ...)
     
     va_list args;
     va_start(args, fmt);
-    
+
+    /* vfprintf consumes the va_list, so each sink takes its own va_copy.
+     * Reusing args across both sinks is undefined behaviour and printed
+     * garbage whenever mode 2 selected file *and* stdout. */
+
     // Output to file (mode 0 or 2)
     if (g_log_output_mode != 1 && log_file) {
+        va_list fargs;
+        va_copy(fargs, args);
         fprintf(log_file, "%s,%d,", filename, line);
-        vfprintf(log_file, fmt, args);
+        vfprintf(log_file, fmt, fargs);
         fprintf(log_file, "\n");
         fflush(log_file);
+        va_end(fargs);
     }
-    
+
     // Output to stdout (mode 1 or 2)
     if (g_log_output_mode != 0) {
+        va_list sargs;
+        va_copy(sargs, args);
         fprintf(stdout, "[%s:%d] ", filename, line);
-        vfprintf(stdout, fmt, args);
+        vfprintf(stdout, fmt, sargs);
         fprintf(stdout, "\n");
         fflush(stdout);
+        va_end(sargs);
     }
     
     // Find current slot to increment line count
