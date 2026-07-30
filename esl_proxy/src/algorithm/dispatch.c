@@ -242,6 +242,8 @@ static inline int send_task(ctrl_t *ctrl, int type)
          */
         atomic_store_explicit(&g_executors[exe_type][core].slot_state[slot],
                               EXE_SLOT_RUNNABLE, memory_order_release);
+        /* KPI 终点（正常派发路径）；ED 放行路径在 ed_notify_once 内打点 */
+        ed_lat_mark_runnable(task_id, ED_LAT_NORMAL);
         WORKER_LOGF("send,task_id,%u,core,%d,slot,%d,type,%d", task_id, core, slot, type);
         sent++;
 #if ED_ENABLE
@@ -308,6 +310,34 @@ int dispatch(int tid)
 void *dispatch_worker(void *arg)
 {
     int tid = (int)(intptr_t)arg;
+    /*
+     * ===== 本函数末尾三个 [scheduler] 指标的口径 =====
+     *
+     * 计时窗口：本行 -> 全部任务完成（g_completed_cnt >= g_task_id）。
+     * 这是一段墙上时钟（wall clock，即真实流逝时间），窗口内编排线程、
+     * cutter 线程、executor 线程都在并发跑，所以它是端到端完工时间
+     * （makespan），不是调度代码自身消耗的 CPU 时间。
+     *
+     * 窗口内混合了四部分耗时，本指标无法把它们分离：
+     *   1) 编排线程建图（new_task / add_predecessors）
+     *   2) cutter 解依赖（deal_completed_queue -> resolve_dep）
+     *   3) dispatcher 派发（drain / send_task / try_early_dispatch）
+     *   4) executor 模拟执行：单线程轮询所有槽位，对 RUNNABLE 槽位每轮把
+     *      duration 减 1，减到 0 才算完成
+     *
+     * 主要失真来自第 4 项：它的循环轮数与 SCALE_EXEC_DURATION 的结果成正比，
+     * 也就是与 EXEC_DURATION_SCALE 成反比。scale 越小，模拟执行占比越高，
+     * 调度侧改动带来的差异会被淹没。因此比较两个调度版本时必须固定 scale，
+     * 且保证 executor 内层循环代码路径一致，否则数字不可比。
+     *
+     * ===== 三个输出的分子/分母 =====
+     *   task_cnt = g_completed_cnt              窗口内完成的任务数
+     *   duration = end_ns - start_ns            上述墙上时钟窗口，单位 ns
+     *   task_tp  = g_completed_cnt * 1000.0 / duration_ns
+     *              分子：完成任务数 x 1000；分母：窗口纳秒数
+     *              => 单位 MTasks/s，即"每微秒完成多少个任务"
+     *              它是系统完工速率，不是"调度器每秒能派发多少任务"
+     */
     uint64_t start_ns = get_time_ns();
     
     while (!atomic_load(&g_orch_is_done)) {
@@ -336,6 +366,7 @@ void *dispatch_worker(void *arg)
     atomic_store(&g_is_done, true);
     uint64_t elapsed_ns = end_ns - start_ns;
 
+    /* 口径见函数开头说明：duration/task_tp 是含模拟执行时间的 makespan 派生值 */
     MAIN_LOGF("[scheduler] task_cnt = %u", g_completed_cnt);
     MAIN_LOGF("[scheduler] duration = %llu ns", (unsigned long long)elapsed_ns);
     MAIN_LOGF("[scheduler] task_tp = %f MTasks/s",(float)(g_completed_cnt * 1000.0 / elapsed_ns));

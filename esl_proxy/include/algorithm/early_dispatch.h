@@ -134,6 +134,36 @@ extern _Atomic uint64_t g_ed_hook0_contrib_cnt;
 #endif
 
 /* -------------------------------------------------------------------------
+ * ready->runnable 延迟：ED 的直接 KPI
+ *
+ * t_ready：该任务最后一个前驱完成、依赖刚满足的时刻（resolve_dep 内打点）
+ * t_run  ：该任务槽位变成 RUNNABLE、真正可执行的时刻
+ * 延迟   = t_run - t_ready，即"依赖已就绪但还没能开跑"的空等时间。
+ * ED 的收益就应该体现在这段延迟变短；makespan 里这段信号被模拟执行时间淹没。
+ *
+ * 样本按路径分开统计：[0]=正常派发路径，[1]=ED 放行路径。
+ * 该组指标在 ED_ENABLE=0/1 两种构建下都编译，便于跨构建对比基线。
+ * ------------------------------------------------------------------------- */
+#define ED_LAT_NORMAL     0
+#define ED_LAT_EARLY      1
+#define ED_LAT_PATH_CNT   2
+/* log2 直方图：桶 b 覆盖 [2^(b-1), 2^b) ns，桶 0 表示 0 ns */
+#define ED_LAT_BUCKET_CNT 24
+
+extern _Atomic uint64_t g_ed_ready_ns[RING_SIZE];   /* 依赖满足时刻 */
+extern _Atomic uint32_t g_ed_ready_tag[RING_SIZE];  /* 换代校验，兼作"样本已消费"标记 */
+extern _Atomic uint64_t g_ed_lat_cnt[ED_LAT_PATH_CNT];
+extern _Atomic uint64_t g_ed_lat_sum_ns[ED_LAT_PATH_CNT];
+extern _Atomic uint64_t g_ed_lat_max_ns[ED_LAT_PATH_CNT];
+extern _Atomic uint64_t g_ed_lat_hist[ED_LAT_PATH_CNT][ED_LAT_BUCKET_CNT];
+
+/* 依赖满足瞬间打点；单写者（cutter 线程）调用 */
+void ed_lat_mark_ready(uint16_t task_id);
+
+/* 槽位变 RUNNABLE 瞬间收样本；同一代任务只计入首次，其余调用自动丢弃 */
+void ed_lat_mark_runnable(uint16_t task_id, int path);
+
+/* -------------------------------------------------------------------------
  * 生命周期 API
  * ------------------------------------------------------------------------- */
 

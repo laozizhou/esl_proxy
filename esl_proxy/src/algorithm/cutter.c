@@ -270,6 +270,11 @@ void resolve_dep(uint16_t cnt, uint16_t* cq_buf, uint16_t rq_buf[][RQ_BATCH_SIZE
             WORKER_LOGF("cutter, task_id,%u, successor_id,%u, predecessor_cnt,%u", task_id, succ_id, g_predecessor_cnt[s_idx]);
             if (g_predecessor_cnt[s_idx] < 1) {
                 task_type_t type = g_basic_buf[s_idx].type;
+                /*
+                 * KPI 起点：依赖刚满足。必须早于下面的 Hook2 通知，
+                 * 否则 ED 路径量到的延迟会退化成 0。
+                 */
+                ed_lat_mark_ready(succ_id);
 #if ED_ENABLE
                 /* Step 6 Hook 2：1->0 线程统一切到 DISPATCHED，并通过 notify_once 竞争唯一通知。 */
                 assert(old_unfin == 1);

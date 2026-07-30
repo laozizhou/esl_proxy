@@ -190,6 +190,55 @@ int main(void) {
 #endif
 #endif
 
+    /*
+     * ready->runnable 延迟：ED 的直接 KPI，ED_ENABLE=0/1 都输出。
+     * 判据是 ed 路径的 mean/p50 应显著低于 normal 路径；若两者接近，
+     * 说明 ED 的槽位预占没有换来可执行时机的提前。
+     */
+    static const char *lat_path_name[ED_LAT_PATH_CNT] = {"normal", "ed"};
+    for (int k = 0; k < ED_LAT_PATH_CNT; k++) {
+        uint64_t n = atomic_load_explicit(&g_ed_lat_cnt[k], memory_order_relaxed);
+        if (n == 0) {
+            MAIN_LOGF("[lat] %s: samples = 0", lat_path_name[k]);
+            continue;
+        }
+        uint64_t sum_ns = atomic_load_explicit(&g_ed_lat_sum_ns[k], memory_order_relaxed);
+        uint64_t max_ns = atomic_load_explicit(&g_ed_lat_max_ns[k], memory_order_relaxed);
+
+        /* 按桶累计推分位数；桶 b 的上界是 2^b ns，故为"不超过"口径 */
+        uint64_t acc = 0;
+        uint64_t p50 = 0;
+        uint64_t p99 = 0;
+        bool p50_done = false;
+        bool p99_done = false;
+        for (int b = 0; b < ED_LAT_BUCKET_CNT; b++) {
+            acc += atomic_load_explicit(&g_ed_lat_hist[k][b], memory_order_relaxed);
+            if (!p50_done && acc * 100 >= n * 50) {
+                p50 = (b == 0) ? 0 : ((uint64_t)1 << b);
+                p50_done = true;
+            }
+            if (!p99_done && acc * 100 >= n * 99) {
+                p99 = (b == 0) ? 0 : ((uint64_t)1 << b);
+                p99_done = true;
+            }
+        }
+        /* 桶上界可能超过真实最大值，收敛到 max 便于阅读 */
+        if (p50 > max_ns) {
+            p50 = max_ns;
+        }
+        if (p99 > max_ns) {
+            p99 = max_ns;
+        }
+
+        /* MAIN_LOGF 单次最多 5 个变参，故分两行输出 */
+        MAIN_LOGF("[lat] %s: samples = %llu, mean = %.1f ns",
+                  lat_path_name[k], (unsigned long long)n,
+                  (double)sum_ns / (double)n);
+        MAIN_LOGF("[lat] %s: p50 <= %llu ns, p99 <= %llu ns, max = %llu ns",
+                  lat_path_name[k], (unsigned long long)p50,
+                  (unsigned long long)p99, (unsigned long long)max_ns);
+    }
+
 #if WORKER_LOG
     log_close();
 #endif

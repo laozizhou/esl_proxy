@@ -28,12 +28,42 @@
 #include <pthread.h>
 #include <time.h>
 
+#ifdef __APPLE__
+#include <mach/mach_time.h>
+#endif
+
 #include "conf.h"
 
 static inline uint64_t get_time_ns(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (uint64_t)ts.tv_sec * 1000000000ULL + ts.tv_nsec;
+}
+
+/*
+ * 高分辨率单调时钟，专供 ready->runnable 延迟 KPI。
+ *
+ * 为什么不直接用 get_time_ns()：CLOCK_MONOTONIC 在本机实测粒度是 1000 ns
+ * （clock_getres 报 1000 ns，连续采样最小非零间隔也是 1000 ns），而这段
+ * 调度延迟常在亚微秒级，会被量化成 0 或 1000，无法分辨。
+ * mach_absolute_time 的 timebase 是 125/3，即 41.667 ns/tick，实测最小
+ * 间隔 41 ns，够用。
+ *
+ * 刻意不改 get_time_ns() 本身：makespan 等既有指标都用它，换时钟会让
+ * 新老数据不可比。
+ */
+static inline uint64_t get_time_ns_hires(void) {
+#ifdef __APPLE__
+    /* mach_timebase_info 结果恒定，首次调用后缓存；并发重复初始化无害。 */
+    static mach_timebase_info_data_t tb;
+    if (tb.denom == 0) {
+        mach_timebase_info(&tb);
+    }
+    return mach_absolute_time() * (uint64_t)tb.numer / (uint64_t)tb.denom;
+#else
+    /* Linux 上 CLOCK_MONOTONIC 本身就是 ns 级，无需特殊处理 */
+    return get_time_ns();
+#endif
 }
 
 #if WORKER_LOG

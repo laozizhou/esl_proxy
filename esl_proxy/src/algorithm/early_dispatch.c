@@ -56,6 +56,13 @@ _Atomic uint64_t g_ed_late_arrival_cnt;
 _Atomic uint64_t g_ed_hook0_contrib_cnt;
 #endif
 
+_Atomic uint64_t g_ed_ready_ns[RING_SIZE];
+_Atomic uint32_t g_ed_ready_tag[RING_SIZE];
+_Atomic uint64_t g_ed_lat_cnt[ED_LAT_PATH_CNT];
+_Atomic uint64_t g_ed_lat_sum_ns[ED_LAT_PATH_CNT];
+_Atomic uint64_t g_ed_lat_max_ns[ED_LAT_PATH_CNT];
+_Atomic uint64_t g_ed_lat_hist[ED_LAT_PATH_CNT][ED_LAT_BUCKET_CNT];
+
 /* -------------------------------------------------------------------------
  * 边锁：Hook 0 与 add_successors 第二趟共用，持锁时间极短
  * ------------------------------------------------------------------------- */
@@ -184,6 +191,8 @@ void ed_init(void)
         atomic_init(&g_dispatch_tag[i], ED_TASK_TAG_INVALID);
         atomic_flag_clear(&g_ed_edge_lock[i]);
         g_ed_pred_snapshot[i].cnt = 0;
+        atomic_init(&g_ed_ready_ns[i], 0);
+        atomic_init(&g_ed_ready_tag[i], ED_TASK_TAG_INVALID);
     }
 
     memset(&g_ed_ready_queue, 0, sizeof g_ed_ready_queue);
@@ -199,6 +208,72 @@ void ed_init(void)
 #if ED_HOOK0_CONTRIB_STATS
     atomic_store_explicit(&g_ed_hook0_contrib_cnt, 0, memory_order_relaxed);
 #endif
+
+    for (int k = 0; k < ED_LAT_PATH_CNT; k++) {
+        atomic_store_explicit(&g_ed_lat_cnt[k], 0, memory_order_relaxed);
+        atomic_store_explicit(&g_ed_lat_sum_ns[k], 0, memory_order_relaxed);
+        atomic_store_explicit(&g_ed_lat_max_ns[k], 0, memory_order_relaxed);
+        for (int b = 0; b < ED_LAT_BUCKET_CNT; b++) {
+            atomic_store_explicit(&g_ed_lat_hist[k][b], 0, memory_order_relaxed);
+        }
+    }
+}
+
+/* -------------------------------------------------------------------------
+ * ready->runnable 延迟采样
+ * ------------------------------------------------------------------------- */
+void ed_lat_mark_ready(uint16_t task_id)
+{
+    uint16_t idx = (uint16_t)(task_id & RING_MASK);
+    /*
+     * 先写时间戳（relaxed），再 release 发布 tag：
+     * 读侧 acquire 读到本代 tag 后，才保证能看到配套的时间戳。
+     */
+    atomic_store_explicit(&g_ed_ready_ns[idx], get_time_ns_hires(), memory_order_relaxed);
+    atomic_store_explicit(&g_ed_ready_tag[idx], (uint32_t)task_id, memory_order_release);
+}
+
+void ed_lat_mark_runnable(uint16_t task_id, int path)
+{
+    uint16_t idx = (uint16_t)(task_id & RING_MASK);
+    uint32_t expected_tag = (uint32_t)task_id;
+    /*
+     * tag 不匹配的两种正常情况，都应当丢弃样本：
+     * 1) 零前驱任务从不打 ready 点，不存在"空等依赖"这段延迟；
+     * 2) 样本已被本代首次调用消费（count>1 的任务会按 block 多次派发）。
+     * 用 CAS 把 tag 置回 INVALID，保证每代任务只贡献一个样本。
+     */
+    if (!atomic_compare_exchange_strong_explicit(
+            &g_ed_ready_tag[idx], &expected_tag, ED_TASK_TAG_INVALID,
+            memory_order_acq_rel, memory_order_acquire)) {
+        return;
+    }
+
+    uint64_t t_ready = atomic_load_explicit(&g_ed_ready_ns[idx], memory_order_relaxed);
+    uint64_t t_run = get_time_ns_hires();
+    if (t_run < t_ready) {
+        return;
+    }
+    uint64_t lat = t_run - t_ready;
+    int k = (path == ED_LAT_EARLY) ? ED_LAT_EARLY : ED_LAT_NORMAL;
+
+    atomic_fetch_add_explicit(&g_ed_lat_cnt[k], 1, memory_order_relaxed);
+    atomic_fetch_add_explicit(&g_ed_lat_sum_ns[k], lat, memory_order_relaxed);
+
+    uint64_t prev = atomic_load_explicit(&g_ed_lat_max_ns[k], memory_order_relaxed);
+    while (lat > prev &&
+           !atomic_compare_exchange_weak_explicit(&g_ed_lat_max_ns[k], &prev, lat,
+                                                  memory_order_relaxed,
+                                                  memory_order_relaxed)) {
+        /* CAS 失败时 prev 已被刷成最新值，直接重试 */
+    }
+
+    /* 桶号 = lat 的二进制位宽，即 lat 落在 [2^(b-1), 2^b) */
+    int b = (lat == 0) ? 0 : (64 - __builtin_clzll(lat));
+    if (b >= ED_LAT_BUCKET_CNT) {
+        b = ED_LAT_BUCKET_CNT - 1;
+    }
+    atomic_fetch_add_explicit(&g_ed_lat_hist[k][b], 1, memory_order_relaxed);
 }
 
 /* Step 6 接入；Step 1 空实现 */
@@ -245,6 +320,8 @@ void ed_notify_once(uint32_t task_id, uint64_t record, ed_notify_source_t source
             EXE_SLOT_RUNNABLE, memory_order_acq_rel, memory_order_acquire)) {
         return;
     }
+    /* KPI 终点（ED 放行路径）：CAS 成功即该任务由门禁态转为可执行 */
+    ed_lat_mark_runnable((uint16_t)task_id, ED_LAT_EARLY);
 
     atomic_store_explicit(&g_executors[type][core].doorbell[slot], 1, memory_order_release);
     WORKER_LOGF("notify_write, s=%u, source=%s",
