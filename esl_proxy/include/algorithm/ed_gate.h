@@ -18,6 +18,7 @@
 #include "conf.h"
 #include "early_dispatch.h"
 #include "executor.h"
+#include "lat_trace.h"
 #include "log.h"
 
 #if ED_ENABLE
@@ -57,7 +58,20 @@ static inline bool ed_poll_doorbell(int type, int core, int slot)
     atomic_fetch_add_explicit(&g_ed_gate_open_cnt, 1, memory_order_relaxed);
     /* KPI 终点（ED 放行路径）：开闸即该任务转为可执行 */
     ed_lat_mark_runnable(e->tasks[slot], ED_LAT_EARLY);
+    lat_trace_run(e->tasks[slot], LAT_TRACE_PATH_ED);
     WORKER_LOGF("gate_open, task=%u, core=%d, slot=%d", e->tasks[slot], core, slot);
+    /*
+     * dispatch_fanin 的语义是「前驱已进入可运行状态」，与它走哪条路径无关。
+     * ED 放行的任务不经过 send_task，若这里不补一次传播，它的后继 fanin 永远差 1、
+     * 达不到 target，两个 staging 入口的第一道条件就永久不满足——ED 每抢走一个
+     * 任务就掐死它所有后继的 ED 资格。放行（而非 stage）才是正确的传播时机：
+     * stage 时任务还是 GATED、并未可运行，此时记账会让后继误判前驱已就绪。
+     *
+     * 不会重复传播：该任务 stage 时已 CAS 掉 g_next_block_idx，send_task 侧必然
+     * 走 skip 分支、不会到达它那一处传播点；GATED->RUNNABLE 的 CAS 也保证只有
+     * 一个胜者进到这里。propagate_dispatch_fanin 本身不幂等，这两点是前提。
+     */
+    propagate_dispatch_fanin(e->tasks[slot]);
     return true;
 }
 

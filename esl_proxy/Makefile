@@ -71,8 +71,11 @@ endif
 ED_ENABLE ?= 1
 ED_UNFIN_THRESHOLD ?= 0xFFFF
 EXEC_DURATION_SCALE ?= 10000
+# 逐任务 ready->runnable 延迟分解探针；诊断用，默认关闭。
+# 开启后 CSV 路径由运行时环境变量 LAT_TRACE_CSV 指定。
+LAT_TRACE ?= 0
 CFLAGS   += -DED_ENABLE=$(ED_ENABLE) -DED_UNFIN_THRESHOLD=$(ED_UNFIN_THRESHOLD) \
-	-DEXEC_DURATION_SCALE=$(EXEC_DURATION_SCALE)
+	-DEXEC_DURATION_SCALE=$(EXEC_DURATION_SCALE) -DLAT_TRACE=$(LAT_TRACE)
 
 OBJ_DIR := build/obj
 BIN_DIR := bin
@@ -93,7 +96,7 @@ DEPS := $(OBJS:.o=.d)
 
 # Rebuild orchestration when case or orch-related flags change.
 ORCH_STAMP := $(OBJ_DIR)/.orch-stamp
-ORCH_CONFIG := case=$(CASE) tier=$(QWEN3_SPMD_TIER) log=$(MAIN_LOG) ed=$(ED_ENABLE) ed_thr=$(ED_UNFIN_THRESHOLD) dur_scale=$(EXEC_DURATION_SCALE)
+ORCH_CONFIG := case=$(CASE) tier=$(QWEN3_SPMD_TIER) log=$(MAIN_LOG) ed=$(ED_ENABLE) ed_thr=$(ED_UNFIN_THRESHOLD) dur_scale=$(EXEC_DURATION_SCALE) lat_trace=$(LAT_TRACE)
 
 .PHONY: all run clean force test-tensormap test-ed-record test-step2 test-step3 test-step4 test-step5 test-step6 test-step7 test-step9 test-cutter-window compile_commands
 

@@ -1,5 +1,6 @@
 #include "cutter.h"
 #include "early_dispatch.h"
+#include "lat_trace.h"
 #include "log.h"
 #include "ring_buf.h"
 #include <assert.h>
@@ -242,6 +243,9 @@ void send_2_ready_queue(uint16_t ready_cnt[], uint16_t rq_buf[][RQ_BATCH_SIZE]) 
         if (ready_cnt[j] > 0)
         {
             WORKER_LOGF("batch_enqueue,%d,cnt,%u,first,%d",j, ready_cnt[j], rq_buf[j][0]);
+            for (uint16_t k = 0; k < ready_cnt[j]; k++) {
+                lat_trace_enq(rq_buf[j][k]);
+            }
             batch_enqueue(rq, rq_buf[j], ready_cnt[j]);
         }
     }
@@ -275,6 +279,7 @@ void resolve_dep(uint16_t cnt, uint16_t* cq_buf, uint16_t rq_buf[][RQ_BATCH_SIZE
                  * 否则 ED 路径量到的延迟会退化成 0。
                  */
                 ed_lat_mark_ready(succ_id);
+                lat_trace_ready(succ_id);
 #if ED_ENABLE
                 /* Step 6 Hook 2：1->0 线程统一切到 DISPATCHED，并通过 notify_once 竞争唯一通知。 */
                 assert(old_unfin == 1);

@@ -246,12 +246,71 @@ static void test_spmd_does_not_complete_after_first_block(void)
               "unfinished SPMD task should keep slot RUNNABLE");
 }
 
+static void test_executor_ticks_only_active_slot(void)
+{
+    reset_runtime_state();
+
+    const int type = TASK_TYPE_CUBE;
+    const int core = 0;
+    const int active_slot = 0;
+    const int waiting_slot = 1;
+    const uint16_t active_task = 505;
+    const uint16_t waiting_task = 506;
+    const uint64_t mask = 1ULL << core;
+
+    /*
+     * active slot 用超大 block_count 防止测试窗口内完成；
+     * waiting slot 则用 count=1/duration=1，若被错误并行推进会立刻完成。
+     */
+    g_basic_buf[active_task & RING_MASK].count = 60000;
+    g_basic_buf[active_task & RING_MASK].duration = 60000;
+    g_basic_buf[waiting_task & RING_MASK].count = 1;
+    g_basic_buf[waiting_task & RING_MASK].duration = 1;
+
+    g_executors[type][core].tasks[active_slot] = active_task;
+    g_executors[type][core].block_idx[active_slot] = 0;
+    g_executors[type][core].duration[active_slot] = 60000;
+    atomic_store_explicit(&g_executors[type][core].slot_state[active_slot],
+                          EXE_SLOT_RUNNABLE, memory_order_release);
+
+    g_executors[type][core].tasks[waiting_slot] = waiting_task;
+    g_executors[type][core].block_idx[waiting_slot] = 0;
+    g_executors[type][core].duration[waiting_slot] = 1;
+    atomic_store_explicit(&g_executors[type][core].slot_state[waiting_slot],
+                          EXE_SLOT_RUNNABLE, memory_order_release);
+
+    g_executors[type][core].idx = (uint8_t)active_slot;
+    g_ctrl_t[0].msg_bitmap[type][active_slot] = 0;
+    g_ctrl_t[0].msg_bitmap[type][waiting_slot] = 0;
+
+    pthread_t worker;
+    int rc = pthread_create(&worker, NULL, executor_worker, NULL);
+    expect_true(rc == 0, "executor_worker thread should start for active-slot test");
+    if (rc != 0) {
+        return;
+    }
+
+    sleep_ms(1);
+    atomic_store_explicit(&g_is_done, true, memory_order_release);
+    pthread_join(worker, NULL);
+
+    expect_u8(atomic_load_explicit(&g_executors[type][core].slot_state[waiting_slot],
+                                   memory_order_acquire),
+              EXE_SLOT_RUNNABLE,
+              "busy core must not execute waiting slot");
+    expect_true((g_ctrl_t[0].msg_bitmap[type][waiting_slot] & mask) == 0,
+                "busy core must not publish completion for waiting slot");
+    expect_u16(g_executors[type][core].duration[waiting_slot], 1,
+               "busy core must keep waiting slot duration unchanged");
+}
+
 int main(void)
 {
     test_send_task_publishes_runnable_without_fake_return();
     test_drain_snapshot_maps_task_id_and_recovers_free_bits();
     test_executor_completion_sets_slot_empty_then_publishes_msg();
     test_spmd_does_not_complete_after_first_block();
+    test_executor_ticks_only_active_slot();
 
     if (g_failures == 0) {
         printf("PASS: step2 protocol checks\n");

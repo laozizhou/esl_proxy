@@ -116,7 +116,7 @@ static inline int add_predecessors(uint16_t task_id, uint16_t target[], uint16_t
     return cnt;
 }
 
-static inline bool new_task(uint32_t task_id, uint16_t type, uint16_t count, uint16_t duration)
+static inline bool new_task(uint32_t task_id, uint16_t type, uint16_t count, uint32_t duration)
 {
     while ((task_id - atomic_load(&g_min_uncomplete_task)) >= RING_SIZE ) {
         MAIN_LOGF("[orchestration] task_id = %u g_min_uncomplete_task = %u", task_id, g_min_uncomplete_task);

@@ -105,57 +105,72 @@ void* executor_worker(void *arg)
         for (int exe_type = 0; exe_type < EXE_TYPE_CNT; exe_type++) {
             for (int core = 0; core < AIC_CNT; core++) {
                 executor_t *e = &g_executors[exe_type][core];
-                for (int slot = 0; slot < AIC_OSTD; slot++) {
-                    uint8_t state = atomic_load_explicit(&e->slot_state[slot],
-                                                         memory_order_acquire);
-#if ED_ENABLE
+                uint8_t active = e->idx;
+                if (active >= AIC_OSTD) {
                     /*
-                     * 非 RUNNABLE（EMPTY 或 GATED）才轮询门铃：
-                     * 开闸成功就本 tick 直接开跑，不必再等下一轮扫描。
+                     * core 空闲时才挑选可运行 slot；同一时刻只允许一个 slot 执行。
                      */
-                    if (state != EXE_SLOT_RUNNABLE) {
-                        if (!ed_poll_doorbell(exe_type, core, slot)) {
+                    for (int slot = 0; slot < AIC_OSTD; slot++) {
+                        uint8_t state = atomic_load_explicit(&e->slot_state[slot],
+                                                             memory_order_acquire);
+#if ED_ENABLE
+                        if (state != EXE_SLOT_RUNNABLE) {
+                            if (!ed_poll_doorbell(exe_type, core, slot)) {
+                                continue;
+                            }
+                        }
+#else
+                        if (state != EXE_SLOT_RUNNABLE) {
                             continue;
                         }
+#endif
+                        e->idx = (uint8_t)slot;
+                        active = (uint8_t)slot;
+                        break;
                     }
-#else
-                    /* EMPTY/GATED 都不执行；只有 RUNNABLE 才 tick。 */
-                    if (state != EXE_SLOT_RUNNABLE) {
+                    if (active >= AIC_OSTD) {
                         continue;
                     }
-#endif
+                }
 
-                    uint16_t task_id = e->tasks[slot];
-                    uint32_t block_count = g_basic_buf[task_id & RING_MASK].count;
+                int slot = (int)active;
+                uint8_t active_state = atomic_load_explicit(&e->slot_state[slot],
+                                                            memory_order_acquire);
+                if (active_state != EXE_SLOT_RUNNABLE) {
+                    e->idx = AIC_OSTD;
+                    continue;
+                }
 
-                    if (block_count > 1) {
-                        /*
-                         * 保留 SPMD 语义：单次 dispatch 的条目要执行完所有 block，
-                         * 不能在首块结束就直接发布 completed。
-                         */
-                        if (e->duration[slot] > 0) {
-                            e->duration[slot]--;
-                            continue;
-                        }
-                        uint16_t next_block = ++e->block_idx[slot];
-                        if (next_block < block_count) {
-                            uint32_t raw_duration = g_basic_buf[task_id & RING_MASK].duration;
-                            e->duration[slot] = SCALE_EXEC_DURATION(raw_duration);
-                            continue;
-                        }
+                uint16_t task_id = e->tasks[slot];
+                uint32_t block_count = g_basic_buf[task_id & RING_MASK].count;
+
+                if (block_count > 1) {
+                    /*
+                     * 保留 SPMD 语义：单次 dispatch 的条目要执行完所有 block，
+                     * 不能在首块结束就直接发布 completed。
+                     */
+                    if (e->duration[slot] > 0) {
+                        e->duration[slot]--;
+                        continue;
+                    }
+                    uint16_t next_block = ++e->block_idx[slot];
+                    if (next_block < block_count) {
+                        uint32_t raw_duration = g_basic_buf[task_id & RING_MASK].duration;
+                        e->duration[slot] = SCALE_EXEC_DURATION(raw_duration);
+                        continue;
+                    }
+                    total_write_cnt++;
+                    WORKER_LOGF("total,%d,core,%d,type,%d,blocks,%u",
+                                total_write_cnt, core, exe_type, block_count);
+                    complete_slot(exe_type, core, slot, task_id);
+                } else {
+                    if (e->duration[slot] > 0) {
+                        e->duration[slot]--;
+                    }
+                    if (e->duration[slot] == 0) {
                         total_write_cnt++;
-                        WORKER_LOGF("total,%d,core,%d,type,%d,blocks,%u",
-                                    total_write_cnt, core, exe_type, block_count);
+                        WORKER_LOGF("total,%d,core,%d,type,%d", total_write_cnt, core, exe_type);
                         complete_slot(exe_type, core, slot, task_id);
-                    } else {
-                        if (e->duration[slot] > 0) {
-                            e->duration[slot]--;
-                        }
-                        if (e->duration[slot] == 0) {
-                            total_write_cnt++;
-                            WORKER_LOGF("total,%d,core,%d,type,%d", total_write_cnt, core, exe_type);
-                            complete_slot(exe_type, core, slot, task_id);
-                        }
                     }
                 }
             }

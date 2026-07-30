@@ -71,9 +71,13 @@
 #error "EXEC_DURATION_SCALE must be > 0"
 #endif
 
+/*
+ * 返回 uint32_t：raw_duration 可超过 65535（qwen3 的 GATE/UP/DOWN_PROJ 就是
+ * 7-9 万 cycles），若在此截断，EXEC_DURATION_SCALE 较小时缩放结果会回绕。
+ */
 #define SCALE_EXEC_DURATION(raw_duration)                                         \
     (((uint32_t)(raw_duration) > (uint32_t)(EXEC_DURATION_SCALE))               \
-         ? (uint16_t)((uint32_t)(raw_duration) / (uint32_t)(EXEC_DURATION_SCALE)) \
-         : (uint16_t)1)
+         ? (uint32_t)((uint32_t)(raw_duration) / (uint32_t)(EXEC_DURATION_SCALE)) \
+         : (uint32_t)1)
 
 #endif /* ALGORITHM_CONF_H */

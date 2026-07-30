@@ -13,6 +13,7 @@
 #include "dispatch.h"
 #include "early_dispatch.h"
 #include "executor.h"
+#include "lat_trace.h"
 #include "log.h"
 #include "manager.h"
 #include "mem_pool.h"
@@ -62,6 +63,7 @@ int main(void) {
     init_predecessors();
     init_ctrl_t();
     ed_init();
+    lat_trace_init();
 
     executor_init();
 
@@ -242,6 +244,8 @@ int main(void) {
                   lat_path_name[k], (unsigned long long)p50,
                   (unsigned long long)p99, (unsigned long long)max_ns);
     }
+
+    lat_trace_dump();
 
 #if WORKER_LOG
     log_close();

@@ -13,9 +13,11 @@
 #include <stdatomic.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "conf.h"
 #include "dispatch.h"
@@ -28,6 +30,7 @@
 /* g_state_buf 正常由 cutter.c 提供；本测试不链接 cutter.o，故给桩。 */
 static task_state g_state_stub[RING_SIZE];
 task_state *g_state_buf = g_state_stub;
+extern atomic_bool g_is_done;
 
 static int g_failures;
 
@@ -55,6 +58,14 @@ static void expect_u64(uint64_t got, uint64_t want, const char *msg)
                 (unsigned long long)got, (unsigned long long)want);
         g_failures++;
     }
+}
+
+static void sleep_ms(long ms)
+{
+    struct timespec req;
+    req.tv_sec = ms / 1000;
+    req.tv_nsec = (ms % 1000) * 1000000L;
+    nanosleep(&req, NULL);
 }
 
 static void reset_runtime_state(void)
@@ -188,11 +199,69 @@ static void test_notify_then_gate_open(void)
                "gate_open_cnt must reconcile with hit+self_notify");
 }
 
+/*
+ * 新执行模型：同一 core 同时只跑一个 slot。
+ * 因此当 idx 指向 running slot 时，不应轮询其他 slot 的 doorbell。
+ */
+static void test_busy_core_does_not_poll_other_slot_doorbell(void)
+{
+    reset_runtime_state();
+
+    const int type = TASK_TYPE_CUBE;
+    const int core = 3;
+    const int running_slot = 0;
+    const int gated_slot = 1;
+    const uint16_t running_task = 701;
+    const uint16_t gated_task = 702;
+
+    g_basic_buf[running_task & RING_MASK].count = 60000;
+    g_basic_buf[running_task & RING_MASK].duration = 60000;
+    g_basic_buf[gated_task & RING_MASK].count = 1;
+    g_basic_buf[gated_task & RING_MASK].duration = 1;
+
+    g_executors[type][core].tasks[running_slot] = running_task;
+    g_executors[type][core].block_idx[running_slot] = 0;
+    g_executors[type][core].duration[running_slot] = 60000;
+    atomic_store_explicit(&g_executors[type][core].slot_state[running_slot],
+                          EXE_SLOT_RUNNABLE, memory_order_release);
+    atomic_store_explicit(&g_executors[type][core].doorbell[running_slot], 0,
+                          memory_order_relaxed);
+
+    g_executors[type][core].tasks[gated_slot] = gated_task;
+    g_executors[type][core].block_idx[gated_slot] = 0;
+    g_executors[type][core].duration[gated_slot] = 1;
+    atomic_store_explicit(&g_executors[type][core].slot_state[gated_slot],
+                          EXE_SLOT_GATED, memory_order_release);
+    atomic_store_explicit(&g_executors[type][core].doorbell[gated_slot], 1,
+                          memory_order_release);
+
+    g_executors[type][core].idx = (uint8_t)running_slot;
+
+    pthread_t worker;
+    int rc = pthread_create(&worker, NULL, executor_worker, NULL);
+    expect_bool(rc == 0, true, "executor_worker thread should start");
+    if (rc != 0) {
+        return;
+    }
+
+    sleep_ms(1);
+    atomic_store_explicit(&g_is_done, true, memory_order_release);
+    pthread_join(worker, NULL);
+
+    expect_u8(atomic_load_explicit(&g_executors[type][core].slot_state[gated_slot],
+                                   memory_order_acquire),
+              EXE_SLOT_GATED, "busy core must not open other slot gate");
+    expect_u8(atomic_load_explicit(&g_executors[type][core].doorbell[gated_slot],
+                                   memory_order_acquire),
+              1, "busy core must not consume other slot doorbell");
+}
+
 int main(void)
 {
     test_gate_opens_on_doorbell();
     test_stale_doorbell_absorbed();
     test_notify_then_gate_open();
+    test_busy_core_does_not_poll_other_slot_doorbell();
 
     if (g_failures == 0) {
         printf("test_step9_gate_open: PASS\n");

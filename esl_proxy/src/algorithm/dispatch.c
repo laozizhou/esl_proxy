@@ -7,6 +7,7 @@
 
 #include "dispatch.h"
 #include "early_dispatch.h"
+#include "lat_trace.h"
 #include "log.h"
 #include "ring_buf.h"
 
@@ -75,6 +76,7 @@ static inline void set_mix(int tid)
             &g_ctrl_t[tid].free_bitmap[TASK_TYPE_CUBE][j], memory_order_acquire);
         uint64_t vector = atomic_load_explicit(
             &g_ctrl_t[tid].free_bitmap[TASK_TYPE_VECTOR][j], memory_order_acquire);
+        lat_trace_setmix(vector, cube & vector);
         atomic_store_explicit(&g_ctrl_t[tid].free_bitmap[TASK_TYPE_MIX][j],
                               cube & vector, memory_order_release);
     }
@@ -142,7 +144,7 @@ static inline void drain_completed_snapshot(int tid)
  *     - continue 不消耗 free_bitmap 位、不写 payload / task_id_map / slot_state
  *
  *   顺序约束：CAS 必须发生在计算 core idx、抢/清 free_bitmap 位之前，否则 skip 分支
- *   会让本地 free_bitmap 前进（idx 已被消耗），下一次 ctzll 拿到错位；同时也会
+ *   会让本地 avail 位图前进（idx 已被消耗），下一次 ctzll 拿到错位；同时也会
  *   泄漏一个 free bit（清了 ctrl->free_bitmap 但没写 slot）。
  *
  *   一期约束：count==1 与 count>1 都走 0->count（不是 0->1）；Hook 1 stager 只
@@ -154,18 +156,46 @@ static inline void drain_completed_snapshot(int tid)
 static inline int send_task(ctrl_t *ctrl, int type)
 {
     int exe_type = type;
-    uint64_t free_bitmap = atomic_load_explicit(&ctrl->free_bitmap[type][0],
-                                                memory_order_acquire) &
-                           atomic_load_explicit(&ctrl->free_bitmap[type][1],
-                                                memory_order_acquire);
-    uint16_t cnt = (uint16_t)__builtin_popcountll(free_bitmap);
+    uint64_t free_s0 = atomic_load_explicit(&ctrl->free_bitmap[type][0],
+                                            memory_order_acquire);
+    uint64_t free_s1 = atomic_load_explicit(&ctrl->free_bitmap[type][1],
+                                            memory_order_acquire);
+    /*
+     * PING-PONG 语义：executor 每核同时只跑一个 slot，另一个 slot 用作预装载位，
+     * 所以「任一 slot 空闲」的核都可以派发，不必等两个 slot 全空。
+     */
+    /*
+     * 本 type 下两个 slot 都空闲的核：优先派这里，走 slot0。
+     * 口径是 type 粒度（free_bitmap 第一维即 type），不是「整个物理核空闲」。
+     */
+    uint64_t avail_both = free_s0 & free_s1;
+    /*
+     * 半空核：另一个 slot 已被占（通常是 ED staged 的任务）。这些核在旧的 AND
+     * 语义下整核不可用，是 ED 开启后 normal 路径饥饿的根源。把它们排在全空核
+     * 之后使用，既消除饥饿，又不破坏「先把任务铺到不同核」的负载均衡——过早把
+     * 任务塞进忙核的第二个 slot 会把它绑死在该核上，别的核空出来也无法接手。
+     * 每核每轮只接一个任务，故名额上限仍是 AIC_CNT。
+     */
+    uint64_t avail_half = (free_s0 | free_s1) & ~avail_both;
+    uint16_t cnt = (uint16_t)__builtin_popcountll(free_s0 | free_s1);
+    lat_trace_send_call(type, cnt, free_s0, free_s1);
     if (cnt <= 0) {
+#if LAT_TRACE
+        /* 只在无核可发这条冷分支上取队列长度，热路径不受影响 */
+        lock_q(&ctrl->ready_queue[type]);
+        uint64_t waiters = ctrl->ready_queue[type].cnt;
+        unlock_q(&ctrl->ready_queue[type]);
+        lat_trace_send_starve(type, waiters);
+#endif
         WORKER_LOGF("send,free_cnt,%d", cnt);
         return 0;
     }
     uint16_t task_ids[AIC_CNT];
     if (!batch_dequeue(&ctrl->ready_queue[type], task_ids, &cnt)){
         return 0;
+    }
+    for (uint16_t i = 0; i < cnt; i++) {
+        lat_trace_deq(task_ids[i]);
     }
     
     int sent = 0;
@@ -198,13 +228,27 @@ static inline int send_task(ctrl_t *ctrl, int type)
         }
 #endif
 
-        /* skip 判定过后再计算 idx，避免 skip 的 task 白占 free_bitmap 位。 */
-        uint64_t idx = (uint64_t)__builtin_ctzll(free_bitmap);
-
-        uint64_t mask = (uint64_t)0x1 << idx;
-        uint64_t free_slot0 = atomic_load_explicit(&ctrl->free_bitmap[type][0],
-                                                   memory_order_acquire);
-        int slot = (free_slot0 & mask) != 0 ? 0 : 1;
+        /*
+         * skip 判定过后再挑核，避免 skip 的 task 白占 free_bitmap 位。
+         * cnt 按可用核数核算、skip 又不消耗名额，故单 dispatcher 下必有余量。
+         */
+        assert((avail_both | avail_half) != 0);
+        uint64_t idx;
+        uint64_t mask;
+        int slot;
+        if (avail_both != 0) {
+            idx = (uint64_t)__builtin_ctzll(avail_both);
+            mask = (uint64_t)0x1 << idx;
+            /* 全空核走 slot0，与 executor 挑选 active slot 的顺序一致 */
+            slot = 0;
+            avail_both &= ~mask;
+        } else {
+            idx = (uint64_t)__builtin_ctzll(avail_half);
+            mask = (uint64_t)0x1 << idx;
+            /* 半空核只剩一个 slot 可用；free_s0/free_s1 是本轮快照，不会被自己改动 */
+            slot = (free_s0 & mask) != 0 ? 0 : 1;
+            avail_half &= ~mask;
+        }
 
         uint64_t old_free = atomic_fetch_and_explicit(
             &ctrl->free_bitmap[type][slot], ~mask, memory_order_acq_rel);
@@ -219,7 +263,6 @@ static inline int send_task(ctrl_t *ctrl, int type)
         // Scale down duration for faster simulation (configurable via EXEC_DURATION_SCALE)
         uint32_t raw_duration = g_basic_buf[task_id & RING_MASK].duration;
         g_executors[exe_type][core].duration[slot] = SCALE_EXEC_DURATION(raw_duration);
-        g_executors[exe_type][core].idx = slot;  // Point to the slot with the new task
         
         if (slot == 1) {
             ctrl->task_id_map2[type][idx] = task_id;
@@ -244,13 +287,13 @@ static inline int send_task(ctrl_t *ctrl, int type)
                               EXE_SLOT_RUNNABLE, memory_order_release);
         /* KPI 终点（正常派发路径）；ED 放行路径在 ed_notify_once 内打点 */
         ed_lat_mark_runnable(task_id, ED_LAT_NORMAL);
+        lat_trace_run(task_id, LAT_TRACE_PATH_NORMAL);
         WORKER_LOGF("send,task_id,%u,core,%d,slot,%d,type,%d", task_id, core, slot, type);
         sent++;
 #if ED_ENABLE
         /* Step 4 Hook 0：成功发布后沿边传播 dispatch_fanin。 */
         propagate_dispatch_fanin(task_id);
 #endif
-        free_bitmap &= ~mask;
     }
     return sent;
 }
@@ -265,7 +308,13 @@ static inline uint64_t queue_count_snapshot(queue_t *q)
     return cnt;
 }
 
-static inline bool has_pending_ready_work(int tid)
+/*
+ * 只看 normal ready_queue，不含 ED 队列。
+ * 用途：ED 是投机派发——staged 任务的前驱可能还没跑完，占住 slot 也不能立刻执行；
+ * 而 ready_queue 里的任务前驱已全部完成、拿到 slot 就能跑。后者必须优先用槽位，
+ * 所以只有本函数返回 false（normal 侧确实排空、槽位富余）时才允许做 ED。
+ */
+static inline bool has_pending_normal_work(int tid)
 {
     if (queue_count_snapshot(&g_ctrl_t[tid].ready_queue[TASK_TYPE_CUBE]) > 0) {
         return true;
@@ -274,6 +323,14 @@ static inline bool has_pending_ready_work(int tid)
         return true;
     }
     if (queue_count_snapshot(&g_ctrl_t[tid].ready_queue[TASK_TYPE_MIX]) > 0) {
+        return true;
+    }
+    return false;
+}
+
+static inline bool has_pending_ready_work(int tid)
+{
+    if (has_pending_normal_work(tid)) {
         return true;
     }
     if (queue_count_snapshot(&g_ed_ready_queue) > 0) {
@@ -286,6 +343,7 @@ static inline bool has_pending_ready_work(int tid)
 int dispatch(int tid)
 {
     int total_sent = 0;
+    lat_trace_dispatch_round();
     /* Step 2 固定顺序：drain -> set_mix -> send_task x3 */
     drain_completed_snapshot(tid);
     set_mix(tid);
@@ -293,11 +351,18 @@ int dispatch(int tid)
     total_sent += send_task(&g_ctrl_t[tid], TASK_TYPE_VECTOR);
     total_sent += send_task(&g_ctrl_t[tid], TASK_TYPE_CUBE);
 #if ED_ENABLE
-    for (int k = 0; k < ED_DRAIN_MAX_PER_ROUND; k++) {
-        if (try_early_dispatch(tid) == 0) {
-            break;
+    /*
+     * 已 ready 的任务优先：只有 normal 队列彻底排空才动 ED。
+     * 队列非空时说明槽位仍供不应求，此时投机占位会挤掉马上就能跑的任务；
+     * 顺带也省掉了这一轮的 dequeue / pick_stage_core / re-push 开销。
+     */
+    if (!has_pending_normal_work(tid)) {
+        for (int k = 0; k < ED_DRAIN_MAX_PER_ROUND; k++) {
+            if (try_early_dispatch(tid) == 0) {
+                break;
+            }
+            total_sent++;
         }
-        total_sent++;
     }
 #endif
     return total_sent;

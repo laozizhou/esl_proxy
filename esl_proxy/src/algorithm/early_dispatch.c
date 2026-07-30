@@ -15,6 +15,7 @@
 
 #include "dispatch.h"
 #include "executor.h"
+#include "lat_trace.h"
 #include "log.h"
 #include "ring_buf.h"
 #include "spin.h"
@@ -445,10 +446,27 @@ static int pick_stage_core(int tid, uint16_t s_id, task_type_t type, int *out_sl
                                           memory_order_acquire);
     uint64_t free1 = atomic_load_explicit(&g_ctrl_t[tid].free_bitmap[type][1],
                                           memory_order_acquire);
-    uint64_t free_any = free0 | free1;
+    uint64_t free_any = free0 | free1;   /* 本 type 下任一 slot 空闲的核 */
+
+    /*
+     * 一选：前驱所在核，本 type 下有任一 slot 空闲即可（数据局部性优先）。
+     * 注意 pcore_bitmap 只收同 type 的前驱（见上面的 ED_UNPACK_TYPE 校验），
+     * 因此算子流水呈 CUBE/VECTOR 交替时（如 paged_attention 的
+     * qk_matmul->softmax_prep->pv_matmul->online_update），每条边两端 type
+     * 必然不同，这一选恒为空、每次都落到二选。
+     */
     uint64_t candidate = pcore_bitmap & free_any;
     if (candidate == 0) {
-        candidate = free_any;
+        /*
+         * 二选：本 type 下两个 slot 都空闲的核，不再限定前驱所在核。
+         * 口径是 type 粒度，不是「整个物理核空闲」——free_bitmap 的第一维就是
+         * type，同一核编号在不同 type 下是各自独立的槽位组。
+         *
+         * 不退化到「忙核的第二个 slot」——staged 任务得等该核当前任务跑完才能
+         * 开跑，ED 的提前收益归零，还白占一个预装载名额不让 normal 用。
+         * 这种情况宁可 re-push 重试（见 g_ed_slot_retry_cnt）。
+         */
+        candidate = free0 & free1;
     }
     if (candidate == 0) {
         return -1;
@@ -572,5 +590,143 @@ re_push_slot_busy:
     }
     atomic_fetch_add_explicit(&g_ed_slot_retry_cnt, 1, memory_order_relaxed);
     return 0;
+}
+#endif
+
+/* -------------------------------------------------------------------------
+ * 逐任务延迟分解探针（LAT_TRACE，诊断用）
+ * ------------------------------------------------------------------------- */
+#if LAT_TRACE
+_Atomic uint64_t g_lt_ready_ns[RING_SIZE];
+_Atomic uint64_t g_lt_enq_ns[RING_SIZE];
+_Atomic uint64_t g_lt_deq_ns[RING_SIZE];
+_Atomic uint64_t g_lt_run_ns[RING_SIZE];
+_Atomic uint32_t g_lt_deq_cnt[RING_SIZE];
+_Atomic uint8_t  g_lt_path[RING_SIZE];
+
+_Atomic uint64_t g_lt_dispatch_round_cnt;
+_Atomic uint64_t g_lt_send_call_cnt[LAT_TRACE_TYPE_CNT];
+_Atomic uint64_t g_lt_send_starve_cnt[LAT_TRACE_TYPE_CNT];
+_Atomic uint64_t g_lt_starve_with_work_cnt[LAT_TRACE_TYPE_CNT];
+_Atomic uint64_t g_lt_starve_waiters_sum[LAT_TRACE_TYPE_CNT];
+_Atomic uint64_t g_lt_free_core_sum[LAT_TRACE_TYPE_CNT];
+_Atomic uint64_t g_lt_free_slot0_sum[LAT_TRACE_TYPE_CNT];
+_Atomic uint64_t g_lt_free_slot1_sum[LAT_TRACE_TYPE_CNT];
+_Atomic uint64_t g_lt_setmix_call_cnt;
+_Atomic uint64_t g_lt_setmix_before_sum;
+_Atomic uint64_t g_lt_setmix_after_sum;
+
+void lat_trace_init(void)
+{
+    for (int i = 0; i < RING_SIZE; i++) {
+        atomic_store_explicit(&g_lt_ready_ns[i], 0, memory_order_relaxed);
+        atomic_store_explicit(&g_lt_enq_ns[i], 0, memory_order_relaxed);
+        atomic_store_explicit(&g_lt_deq_ns[i], 0, memory_order_relaxed);
+        atomic_store_explicit(&g_lt_run_ns[i], 0, memory_order_relaxed);
+        atomic_store_explicit(&g_lt_deq_cnt[i], 0, memory_order_relaxed);
+        atomic_store_explicit(&g_lt_path[i], LAT_TRACE_PATH_NONE, memory_order_relaxed);
+    }
+    atomic_store_explicit(&g_lt_dispatch_round_cnt, 0, memory_order_relaxed);
+    for (int t = 0; t < LAT_TRACE_TYPE_CNT; t++) {
+        atomic_store_explicit(&g_lt_send_call_cnt[t], 0, memory_order_relaxed);
+        atomic_store_explicit(&g_lt_send_starve_cnt[t], 0, memory_order_relaxed);
+        atomic_store_explicit(&g_lt_starve_with_work_cnt[t], 0, memory_order_relaxed);
+        atomic_store_explicit(&g_lt_starve_waiters_sum[t], 0, memory_order_relaxed);
+        atomic_store_explicit(&g_lt_free_core_sum[t], 0, memory_order_relaxed);
+        atomic_store_explicit(&g_lt_free_slot0_sum[t], 0, memory_order_relaxed);
+        atomic_store_explicit(&g_lt_free_slot1_sum[t], 0, memory_order_relaxed);
+    }
+    atomic_store_explicit(&g_lt_setmix_call_cnt, 0, memory_order_relaxed);
+    atomic_store_explicit(&g_lt_setmix_before_sum, 0, memory_order_relaxed);
+    atomic_store_explicit(&g_lt_setmix_after_sum, 0, memory_order_relaxed);
+}
+
+void lat_trace_dump(void)
+{
+    /* TASK_TYPE_CUBE=0；TASK_TYPE_VECTOR 与 TASK_TYPE_MIX 同为 1；下标 2 无人使用 */
+    static const char *type_name[LAT_TRACE_TYPE_CNT] = {"cube", "vector(=mix)", "idx2"};
+    uint64_t rounds = atomic_load_explicit(&g_lt_dispatch_round_cnt, memory_order_relaxed);
+    MAIN_LOGF("[trace] dispatch_rounds = %llu", (unsigned long long)rounds);
+
+    uint64_t mix_calls = atomic_load_explicit(&g_lt_setmix_call_cnt, memory_order_relaxed);
+    if (mix_calls > 0) {
+        double before = (double)atomic_load_explicit(&g_lt_setmix_before_sum,
+                                                     memory_order_relaxed) / (double)mix_calls;
+        double after = (double)atomic_load_explicit(&g_lt_setmix_after_sum,
+                                                    memory_order_relaxed) / (double)mix_calls;
+        MAIN_LOGF("[trace] set_mix: vector_free_mean %.2f -> %.2f (lost %.2f cores/call)",
+                  before, after, before - after);
+    }
+    for (int t = 0; t < LAT_TRACE_TYPE_CNT; t++) {
+        uint64_t calls = atomic_load_explicit(&g_lt_send_call_cnt[t], memory_order_relaxed);
+        uint64_t starve = atomic_load_explicit(&g_lt_send_starve_cnt[t], memory_order_relaxed);
+        uint64_t hungry = atomic_load_explicit(&g_lt_starve_with_work_cnt[t], memory_order_relaxed);
+        uint64_t waiters = atomic_load_explicit(&g_lt_starve_waiters_sum[t], memory_order_relaxed);
+        uint64_t free_sum = atomic_load_explicit(&g_lt_free_core_sum[t], memory_order_relaxed);
+        if (calls == 0) {
+            continue;
+        }
+        /*
+         * free_sum 口径 = popcount(slot0 | slot1)，即 send_task 可派发的核数
+         * （任一 slot 空闲即可用，每核每轮一个名额），上限 AIC_CNT。
+         * 与旧版要求两 slot 全空的 free_core_mean 不可直接比较。
+         */
+        double s0m = (double)atomic_load_explicit(&g_lt_free_slot0_sum[t],
+                                                  memory_order_relaxed) / (double)calls;
+        double s1m = (double)atomic_load_explicit(&g_lt_free_slot1_sum[t],
+                                                  memory_order_relaxed) / (double)calls;
+        double anym = (double)free_sum / (double)calls;
+        MAIN_LOGF("[trace] %s: calls = %llu, usable_core_mean = %.2f",
+                  type_name[t], (unsigned long long)calls, anym);
+        /* both = 两 slot 全空的核（优先派这里）；容斥：|A∩B| = |A|+|B|-|A∪B| */
+        MAIN_LOGF("[trace] %s: free slot0 = %.2f, slot1 = %.2f, both = %.2f, usable_core = %.2f",
+                  type_name[t], s0m, s1m, s0m + s1m - anym, anym);
+        MAIN_LOGF("[trace] %s: starve = %llu (%.2f%%), starve_with_waiters = %llu (%.2f%%)",
+                  type_name[t], (unsigned long long)starve,
+                  100.0 * (double)starve / (double)calls,
+                  (unsigned long long)hungry,
+                  100.0 * (double)hungry / (double)calls);
+        if (hungry > 0) {
+            MAIN_LOGF("[trace] %s: waiters_mean_when_hungry = %.2f",
+                      type_name[t], (double)waiters / (double)hungry);
+        }
+    }
+
+    const char *csv = getenv("LAT_TRACE_CSV");
+    if (csv == NULL || csv[0] == '\0') {
+        return;
+    }
+    FILE *fp = fopen(csv, "w");
+    if (fp == NULL) {
+        MAIN_LOGF("[trace] cannot open %s", csv);
+        return;
+    }
+    fprintf(fp, "task_id,path,ready_ns,enq_ns,deq_ns,run_ns,"
+                "d_ready_enq,d_enq_deq,d_deq_run,d_total,deq_cnt\n");
+    for (int i = 0; i < RING_SIZE; i++) {
+        uint64_t ready = atomic_load_explicit(&g_lt_ready_ns[i], memory_order_relaxed);
+        if (ready == 0) {
+            continue;
+        }
+        uint64_t enq = atomic_load_explicit(&g_lt_enq_ns[i], memory_order_relaxed);
+        uint64_t deq = atomic_load_explicit(&g_lt_deq_ns[i], memory_order_relaxed);
+        uint64_t run = atomic_load_explicit(&g_lt_run_ns[i], memory_order_relaxed);
+        uint32_t dcnt = atomic_load_explicit(&g_lt_deq_cnt[i], memory_order_relaxed);
+        unsigned path = atomic_load_explicit(&g_lt_path[i], memory_order_relaxed);
+
+        /* 缺失的那一段留空，避免把 0 当成时间戳参与减法 */
+        long long d_ready_enq = enq ? (long long)(enq - ready) : -1;
+        long long d_enq_deq = (enq && deq) ? (long long)(deq - enq) : -1;
+        long long d_deq_run = (deq && run) ? (long long)(run - deq) : -1;
+        long long d_total = run ? (long long)(run - ready) : -1;
+
+        fprintf(fp, "%d,%u,%llu,%llu,%llu,%llu,%lld,%lld,%lld,%lld,%u\n",
+                i, path,
+                (unsigned long long)ready, (unsigned long long)enq,
+                (unsigned long long)deq, (unsigned long long)run,
+                d_ready_enq, d_enq_deq, d_deq_run, d_total, dcnt);
+    }
+    fclose(fp);
+    MAIN_LOGF("[trace] csv written: %s", csv);
 }
 #endif
