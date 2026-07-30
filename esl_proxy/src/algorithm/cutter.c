@@ -31,24 +31,32 @@ static inline bool update_task_state(uint16_t cnt, uint16_t* cq_buf)
 {
     if (cnt <= 0)
         return false;
-    
-    uint16_t task_id;
-    uint16_t idx;
+
     for (uint32_t j = 0; j < cnt; j++) {
-        task_id = cq_buf[j];
-        int idx = task_id;
-        g_state_buf[idx].state = TASK_STATUS_COMPLETED;
+        uint16_t task_id = cq_buf[j];
+        uint16_t idx = (uint16_t)(task_id & RING_MASK);
+        if (g_state_buf[idx].task_id == task_id) {
+            g_state_buf[idx].state = TASK_STATUS_COMPLETED;
+        }
     }
-    uint16_t i = atomic_load_explicit(&g_min_uncomplete_task, memory_order_acquire);
-    uint16_t end = atomic_load_explicit(&g_task_id, memory_order_acquire);
+
+    uint32_t i = (uint32_t)atomic_load_explicit(&g_min_uncomplete_task, memory_order_acquire);
+    uint32_t end = (uint32_t)atomic_load_explicit(&g_task_id, memory_order_acquire);
     for (; i < end; i++) {
-        if (g_state_buf[i].state != TASK_STATUS_COMPLETED) {
+        uint16_t idx = (uint16_t)(i & RING_MASK);
+        if (g_state_buf[idx].task_id != (uint16_t)i ||
+            g_state_buf[idx].state != TASK_STATUS_COMPLETED) {
             break;
         }
     }
-    atomic_store(&g_min_uncomplete_task, i);
+    atomic_store(&g_min_uncomplete_task, (int)i);
     WORKER_LOGF("min_uncomplete_task,%u, completed_cnt,%u, cube_ready_cnt,%d,vector_ready_cnt,%d", \
-        g_min_uncomplete_task, end, g_ctrl_t[0].ready_queue[2].cnt, g_ctrl_t[0].ready_queue[1].cnt);
+        (unsigned)atomic_load_explicit(&g_min_uncomplete_task, memory_order_relaxed),
+        (unsigned)end,
+        g_ctrl_t[0].ready_queue[2].cnt,
+        g_ctrl_t[0].ready_queue[1].cnt);
+
+    return true;
 }
 
 #if ED_ENABLE
@@ -94,6 +102,11 @@ void add_successors(uint16_t ready_cnt[], uint16_t rq_buf[][RQ_BATCH_SIZE]) {
 
         if (ptr->cnt <= 0) {
             ed_init_task_meta(s_full, 0);
+            if (g_state_buf != NULL) {
+                g_state_buf[s_idx].task_id = s_full;
+                g_state_buf[s_idx].state = TASK_STATUS_SUBMITTED;
+                g_state_buf[s_idx].successor_cnt = 0;
+            }
             g_predecessor_cnt[s_idx] = 0;
             rq_buf[s_type][ready_cnt[s_type]++] = s_full;
             g_commit_task_id++;
@@ -112,8 +125,17 @@ void add_successors(uint16_t ready_cnt[], uint16_t rq_buf[][RQ_BATCH_SIZE]) {
         for (uint16_t k = 0; k < original_cnt; k++) {
             uint16_t p_full = ptr->exp[k];
             uint16_t p_idx = (uint16_t)(p_full & RING_MASK);
-            if (g_state_buf[p_idx].state == TASK_STATUS_COMPLETED) {
-                continue;
+            if (g_state_buf != NULL) {
+                uint16_t tracked_task = g_state_buf[p_idx].task_id;
+                if (tracked_task != p_full &&
+                    tracked_task != 0 &&
+                    atomic_load_explicit(&g_ring_task_tag[p_idx], memory_order_acquire) !=
+                        (uint32_t)p_full) {
+                    continue;
+                }
+                if (g_state_buf[p_idx].state == TASK_STATUS_COMPLETED) {
+                    continue;
+                }
             }
             if (predecessor_cnt < CON_NODE_CNT) {
                 survivors[predecessor_cnt].p_full = p_full;
@@ -124,6 +146,11 @@ void add_successors(uint16_t ready_cnt[], uint16_t rq_buf[][RQ_BATCH_SIZE]) {
 
         /* 关键屏障：先固化 s 元数据，再 append 边，避免 Hook0 读到旧 target。 */
         ed_init_task_meta(s_full, predecessor_cnt);
+        if (g_state_buf != NULL) {
+            g_state_buf[s_idx].task_id = s_full;
+            g_state_buf[s_idx].state = TASK_STATUS_SUBMITTED;
+            g_state_buf[s_idx].successor_cnt = 0;
+        }
         g_predecessor_cnt[s_idx] = predecessor_cnt;
 
 #if ED_ENABLE
@@ -160,7 +187,9 @@ void add_successors(uint16_t ready_cnt[], uint16_t rq_buf[][RQ_BATCH_SIZE]) {
                                              &g_dispatch_fanin[s_idx], 1,
                                              memory_order_acq_rel) +
                                          1);
-                    atomic_fetch_add_explicit(&g_ed_late_arrival_cnt, 1, memory_order_relaxed);
+                    if (g_basic_buf[s_idx].count == 1) {
+                        atomic_fetch_add_explicit(&g_ed_late_arrival_cnt, 1, memory_order_relaxed);
+                    }
                     cutter_maybe_enter_staging(s_full, s_idx, fanin_now);
                 }
                 continue;
@@ -169,7 +198,9 @@ void add_successors(uint16_t ready_cnt[], uint16_t rq_buf[][RQ_BATCH_SIZE]) {
             uint16_t successor_idx = g_successor_buf[p_idx].cnt;
             g_successor_buf[p_idx].node[successor_idx] = s_full;
             g_successor_buf[p_idx].cnt = successor_idx + 1;
-            g_state_buf[p_idx].successor_cnt++;
+            if (g_state_buf != NULL) {
+                g_state_buf[p_idx].successor_cnt++;
+            }
 
             bool dispatched_this_gen =
                 atomic_load_explicit(&g_dispatch_tag[p_idx], memory_order_acquire) ==
@@ -184,13 +215,17 @@ void add_successors(uint16_t ready_cnt[], uint16_t rq_buf[][RQ_BATCH_SIZE]) {
                                      &g_dispatch_fanin[s_idx], 1,
                                      memory_order_acq_rel) +
                                  1);
-            atomic_fetch_add_explicit(&g_ed_late_arrival_cnt, 1, memory_order_relaxed);
+            if (g_basic_buf[s_idx].count == 1) {
+                atomic_fetch_add_explicit(&g_ed_late_arrival_cnt, 1, memory_order_relaxed);
+            }
             cutter_maybe_enter_staging(s_full, s_idx, fanin_now);
 #else
             uint16_t successor_idx = g_successor_buf[p_idx].cnt;
             g_successor_buf[p_idx].node[successor_idx] = s_full;
             g_successor_buf[p_idx].cnt = successor_idx + 1;
-            g_state_buf[p_idx].successor_cnt++;
+            if (g_state_buf != NULL) {
+                g_state_buf[p_idx].successor_cnt++;
+            }
 #endif
         }
 
@@ -259,7 +294,7 @@ void resolve_dep(uint16_t cnt, uint16_t* cq_buf, uint16_t rq_buf[][RQ_BATCH_SIZE
     }
 }
 
-void deal_completed_queue() {
+void deal_completed_queue(void) {
     for (int i = 0; i < DISPATCH_THREAD_CNT; i++) {
         uint16_t cq_buf[CQ_BATCH_SIZE];
         uint16_t rq_buf[2][RQ_BATCH_SIZE];
@@ -281,7 +316,7 @@ void deal_completed_queue() {
 
 void *cutter_worker(void *arg)
 {
-    int tid = (int)(intptr_t)arg;
+    (void)arg;
     init_state_buf();
     while (!atomic_load(&g_is_done)) {
         deal_completed_queue();

@@ -94,10 +94,9 @@ static inline void unlock(int slotIdx)
     atomic_flag_clear_explicit(&g_lock_buf[slotIdx], memory_order_release);
 }
 
-static int add_predecessors(uint16_t task_id, uint16_t target[], uint16_t n, uint16_t start)
+static inline int add_predecessors(uint16_t task_id, uint16_t target[], uint16_t n, uint16_t start)
 {
-    // int slotIdx = task_id & RING_MASK;
-    int slotIdx = task_id;
+    int slotIdx = task_id & RING_MASK;
     struct predecessor_list *ptr = &g_predecessors[slotIdx];
     int cnt = start;
     if (ptr->cnt <= 0)
@@ -129,6 +128,7 @@ static inline bool new_task(uint32_t task_id, uint16_t type, uint16_t count, uin
     g_basic_buf[task_id & RING_MASK].duration = duration;
     g_subtask_cnt += count;
     WORKER_LOGF("new,task_id,%u,type,%d,subtask_cnt,%d", task_id, type, count);
+    return true;
 }
 
 #endif /* DAG_RING_BUF_H */

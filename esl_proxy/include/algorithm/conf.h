@@ -59,4 +59,21 @@
 #define ED_UNFIN_THRESHOLD 0xFFFF
 #endif
 
+/*
+ * 模拟执行时长缩放因子：executor 每次派发时把 duration 按该因子缩小；
+ * 例如 10000 表示 raw_duration/10000（并且最少执行 1 tick）。
+ */
+#ifndef EXEC_DURATION_SCALE
+#define EXEC_DURATION_SCALE 10000u
+#endif
+
+#if EXEC_DURATION_SCALE == 0
+#error "EXEC_DURATION_SCALE must be > 0"
+#endif
+
+#define SCALE_EXEC_DURATION(raw_duration)                                         \
+    (((uint32_t)(raw_duration) > (uint32_t)(EXEC_DURATION_SCALE))               \
+         ? (uint16_t)((uint32_t)(raw_duration) / (uint32_t)(EXEC_DURATION_SCALE)) \
+         : (uint16_t)1)
+
 #endif /* ALGORITHM_CONF_H */

@@ -36,6 +36,7 @@ static uint8_t g_mem_pool_storage[MEM_POOL_BYTES];
 static when2free_entry_t g_when2free_entries[WHEN2FREE_CAP];
 
 extern atomic_bool g_orch_is_done;
+extern uint16_t g_completed_task_cnt;
 
 int main(void) {
     pthread_t dispatch_threads[DISPATCH_THREAD_CNT];
@@ -44,6 +45,7 @@ int main(void) {
 
 #if ORCHESTRATION_TIME
     uint64_t total_start_ns = get_time_ns();
+    (void)total_start_ns;
 #endif
 
 #if WORKER_LOG
@@ -103,6 +105,90 @@ int main(void) {
         pthread_join(dispatch_threads[i], NULL);
     }
     // pthread_join(manager_thread, NULL);
+
+    MAIN_LOGF("[summary] completed_task_cnt = %u", (unsigned)g_completed_task_cnt);
+
+#if ED_ENABLE
+    uint64_t stage_cnt = atomic_load_explicit(&g_ed_stage_cnt, memory_order_relaxed);
+    uint64_t hit_cnt = atomic_load_explicit(&g_ed_hit_cnt, memory_order_relaxed);
+    uint64_t self_notify_cnt = atomic_load_explicit(&g_ed_self_notify_cnt, memory_order_relaxed);
+    uint64_t slot_retry_cnt = atomic_load_explicit(&g_ed_slot_retry_cnt, memory_order_relaxed);
+    uint64_t block_cas_fail_cnt = atomic_load_explicit(&g_ed_block_cas_fail_cnt, memory_order_relaxed);
+    uint64_t send_skip_cnt = atomic_load_explicit(&g_ed_send_skip_cnt, memory_order_relaxed);
+    uint64_t late_arrival_cnt = atomic_load_explicit(&g_ed_late_arrival_cnt, memory_order_relaxed);
+
+    MAIN_LOGF("[ed] stage_cnt = %llu", (unsigned long long)stage_cnt);
+    MAIN_LOGF("[ed] hit_cnt = %llu", (unsigned long long)hit_cnt);
+    MAIN_LOGF("[ed] self_notify_cnt = %llu", (unsigned long long)self_notify_cnt);
+    MAIN_LOGF("[ed] slot_retry_cnt = %llu", (unsigned long long)slot_retry_cnt);
+    MAIN_LOGF("[ed] block_cas_fail_cnt = %llu", (unsigned long long)block_cas_fail_cnt);
+    MAIN_LOGF("[ed] send_skip_cnt = %llu", (unsigned long long)send_skip_cnt);
+    MAIN_LOGF("[ed] late_arrival_cnt = %llu", (unsigned long long)late_arrival_cnt);
+
+    if (stage_cnt > 0) {
+        double doorbell_ratio = (double)(hit_cnt + self_notify_cnt) / (double)stage_cnt;
+        double self_notify_ratio = (hit_cnt + self_notify_cnt) > 0
+                                       ? (double)self_notify_cnt / (double)(hit_cnt + self_notify_cnt)
+                                       : 0.0;
+        MAIN_LOGF("[ed] doorbell_ratio = %.6f", doorbell_ratio);
+        MAIN_LOGF("[ed] self_notify_ratio = %.6f", self_notify_ratio);
+    }
+
+    uint32_t leaked_staging = 0;
+    uint32_t block_leaked = 0;
+    uint32_t slot_leaked = 0;
+    uint16_t last = (uint16_t)((atomic_load_explicit(&g_task_id, memory_order_acquire) >= RING_SIZE)
+                                    ? RING_SIZE
+                                    : atomic_load_explicit(&g_task_id, memory_order_relaxed));
+    for (uint16_t i = 0; i < last; i++) {
+        if (g_basic_buf[i].count == 0) {
+            continue;
+        }
+        uint8_t st = atomic_load_explicit(&g_spec_state[i], memory_order_relaxed);
+        if (st == ED_SPEC_STAGING) {
+            leaked_staging++;
+        }
+        uint16_t nbi = atomic_load_explicit(&g_next_block_idx[i], memory_order_relaxed);
+        if (nbi != g_basic_buf[i].count) {
+            block_leaked++;
+        }
+    }
+    for (int t = 0; t < EXE_TYPE_CNT; t++) {
+        for (int c = 0; c < AIC_CNT; c++) {
+            for (int s = 0; s < AIC_OSTD; s++) {
+                if (atomic_load_explicit(&g_executors[t][c].slot_state[s], memory_order_relaxed) !=
+                    EXE_SLOT_EMPTY) {
+                    slot_leaked++;
+                }
+            }
+        }
+    }
+
+    MAIN_LOGF("[ed] leaked_staging = %u", leaked_staging);
+    MAIN_LOGF("[ed] block_leaked = %u", block_leaked);
+    MAIN_LOGF("[ed] slot_leaked = %u", slot_leaked);
+
+    uint64_t sum_target = 0;
+    for (uint16_t i = 0; i < last; i++) {
+        if (g_basic_buf[i].count == 0) {
+            continue;
+        }
+        if (g_basic_buf[i].count != 1) {
+            continue;
+        }
+        uint16_t cur = atomic_load_explicit(&g_dispatch_fanin[i], memory_order_relaxed);
+        uint16_t tgt = g_dispatch_fanin_target[i];
+        sum_target += tgt;
+        if (cur != tgt) {
+            MAIN_LOGF("[ed] fanin_check, s=%u, cur=%u, tgt=%u MISMATCH", i, cur, tgt);
+        }
+    }
+    MAIN_LOGF("[ed] sum_fanin_target = %llu", (unsigned long long)sum_target);
+#if ED_HOOK0_CONTRIB_STATS
+    MAIN_LOGF("[ed] hook0_contrib_cnt = %llu",
+              (unsigned long long)atomic_load_explicit(&g_ed_hook0_contrib_cnt, memory_order_relaxed));
+#endif
+#endif
 
 #if WORKER_LOG
     log_close();

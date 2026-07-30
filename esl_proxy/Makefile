@@ -23,8 +23,12 @@
 ALL_CASES := \
 	qwen3_dynamic_manual_scope.h \
 	qwen3_dynamic_tensormap.h \
+	qwen3_dynamic_tensormap_ot1.h \
 	paged_attention_unroll.h \
-	paged_attention_unroll_manual_scope.h
+	paged_attention_unroll_manual_scope.h \
+	ed_a10_probe.h \
+	ed_a11_probe.h \
+	ed_a12_ring_stress.h
 
 CASE ?= qwen3_dynamic_manual_scope.h
 
@@ -32,7 +36,7 @@ ifneq ($(filter $(CASE),$(ALL_CASES)),$(CASE))
 $(error Unknown CASE='$(CASE)'. Valid: $(ALL_CASES))
 endif
 
-QWEN3_CASES := qwen3_dynamic_manual_scope.h qwen3_dynamic_tensormap.h
+QWEN3_CASES := qwen3_dynamic_manual_scope.h qwen3_dynamic_tensormap.h qwen3_dynamic_tensormap_ot1.h
 
 CC       := cc
 # -MMD -MP emits a .d alongside each .o listing the headers it included, so a
@@ -66,7 +70,9 @@ endif
 # Early-dispatch compile switch (Step 1+)
 ED_ENABLE ?= 1
 ED_UNFIN_THRESHOLD ?= 0xFFFF
-CFLAGS   += -DED_ENABLE=$(ED_ENABLE) -DED_UNFIN_THRESHOLD=$(ED_UNFIN_THRESHOLD)
+EXEC_DURATION_SCALE ?= 10000
+CFLAGS   += -DED_ENABLE=$(ED_ENABLE) -DED_UNFIN_THRESHOLD=$(ED_UNFIN_THRESHOLD) \
+	-DEXEC_DURATION_SCALE=$(EXEC_DURATION_SCALE)
 
 OBJ_DIR := build/obj
 BIN_DIR := bin
@@ -87,7 +93,7 @@ DEPS := $(OBJS:.o=.d)
 
 # Rebuild orchestration when case or orch-related flags change.
 ORCH_STAMP := $(OBJ_DIR)/.orch-stamp
-ORCH_CONFIG := case=$(CASE) tier=$(QWEN3_SPMD_TIER) log=$(MAIN_LOG) ed=$(ED_ENABLE) ed_thr=$(ED_UNFIN_THRESHOLD)
+ORCH_CONFIG := case=$(CASE) tier=$(QWEN3_SPMD_TIER) log=$(MAIN_LOG) ed=$(ED_ENABLE) ed_thr=$(ED_UNFIN_THRESHOLD) dur_scale=$(EXEC_DURATION_SCALE)
 
 .PHONY: all run clean force test-tensormap test-ed-record test-step2 test-step3 test-step4 test-step5 test-step6 test-step7 test-cutter-window compile_commands
 

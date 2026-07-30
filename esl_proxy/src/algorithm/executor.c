@@ -16,6 +16,14 @@
 #include "early_dispatch.h"
 #include "ring_buf.h"
 
+#ifndef ED_A11_PROBE
+#define ED_A11_PROBE 0
+#endif
+
+#ifndef ED_A11_DUMP_PERIOD
+#define ED_A11_DUMP_PERIOD 500
+#endif
+
 extern _Atomic bool g_is_done;
 extern ctrl_t g_ctrl_t[DISPATCH_THREAD_CNT];
 extern executor_t g_executors[EXE_TYPE_CNT][AIC_CNT];
@@ -53,6 +61,9 @@ static inline void complete_slot(int type, int core, int slot, uint16_t task_id_
 #if ED_ENABLE
     /* Step 2：仅做 tag 校验后清记录，不接 Hook。 */
     ed_task_dispatch_record_clear(task_id_done);
+    uint32_t live_tag = atomic_load_explicit(
+        &g_ring_task_tag[task_id_done & RING_MASK], memory_order_acquire);
+    WORKER_LOGF("slot_free, task=%u, tag=%u", task_id_done, live_tag);
 #else
     (void)task_id_done;
 #endif
@@ -66,8 +77,30 @@ void* executor_worker(void *arg)
 {
     (void)arg;
     int total_write_cnt = 0;
+#if ED_ENABLE && ED_A11_PROBE
+    uint64_t iterations = 0;
+#endif
     while (!atomic_load(&g_is_done))
     {
+#if ED_ENABLE && ED_A11_PROBE
+        iterations++;
+        if ((iterations % ED_A11_DUMP_PERIOD) == 0) {
+            for (int t = 0; t < EXE_TYPE_CNT; t++) {
+                for (int c = 0; c < AIC_CNT; c++) {
+                    for (int sl = 0; sl < AIC_OSTD; sl++) {
+                        uint16_t task = g_executors[t][c].tasks[sl];
+                        uint16_t s_idx = task & RING_MASK;
+                        WORKER_LOGF("slot_state_dump, s=%u, unfin=%u, spec=%u, state=%u, doorbell=%u",
+                                    task,
+                                    (unsigned)atomic_load_explicit(&g_unfin_pred_cnt[s_idx], memory_order_relaxed),
+                                    (unsigned)atomic_load_explicit(&g_spec_state[s_idx], memory_order_relaxed),
+                                    (unsigned)atomic_load_explicit(&g_executors[t][c].slot_state[sl], memory_order_relaxed),
+                                    (unsigned)atomic_load_explicit(&g_executors[t][c].doorbell[sl], memory_order_relaxed));
+                    }
+                }
+            }
+        }
+#endif
         for (int exe_type = 0; exe_type < EXE_TYPE_CNT; exe_type++) {
             for (int core = 0; core < AIC_CNT; core++) {
                 executor_t *e = &g_executors[exe_type][core];
@@ -99,9 +132,7 @@ void* executor_worker(void *arg)
                         uint16_t next_block = ++e->block_idx[slot];
                         if (next_block < block_count) {
                             uint32_t raw_duration = g_basic_buf[task_id & RING_MASK].duration;
-                            e->duration[slot] = (raw_duration > 10000)
-                                                  ? (uint16_t)(raw_duration / 10000)
-                                                  : 1;
+                            e->duration[slot] = SCALE_EXEC_DURATION(raw_duration);
                             continue;
                         }
                         total_write_cnt++;

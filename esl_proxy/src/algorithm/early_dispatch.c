@@ -9,6 +9,7 @@
 #include "early_dispatch.h"
 
 #include <assert.h>
+#include <sched.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -18,6 +19,10 @@
 #include "ring_buf.h"
 #include "spin.h"
 #include "task.h"
+
+#ifndef ED_A10_FORCE_SELF_NOTIFY
+#define ED_A10_FORCE_SELF_NOTIFY 0
+#endif
 
 /* cutter.c 中分配；ed_init_task_meta 需清 successor_cnt */
 extern task_state *g_state_buf;
@@ -242,6 +247,8 @@ void ed_notify_once(uint32_t task_id, uint64_t record, ed_notify_source_t source
     }
 
     atomic_store_explicit(&g_executors[type][core].doorbell[slot], 1, memory_order_release);
+    WORKER_LOGF("notify_write, s=%u, source=%s",
+                task_id, (source == ED_NOTIFY_HOOK2) ? "hook2" : "hook1");
     if (source == ED_NOTIFY_HOOK2) {
         atomic_fetch_add_explicit(&g_ed_hit_cnt, 1, memory_order_relaxed);
     } else {
@@ -429,8 +436,7 @@ int try_early_dispatch(int tid)
     g_executors[type][core].tasks[slot] = s_id;
     g_executors[type][core].block_idx[slot] = 0;
     uint32_t raw_duration = g_basic_buf[s_idx].duration;
-    g_executors[type][core].duration[slot] =
-        (raw_duration > 10000) ? (uint16_t)(raw_duration / 10000) : 1;
+    g_executors[type][core].duration[slot] = SCALE_EXEC_DURATION(raw_duration);
     if (slot == 1) {
         g_ctrl_t[tid].task_id_map2[type][core] = s_id;
     } else {
@@ -439,10 +445,32 @@ int try_early_dispatch(int tid)
     atomic_store_explicit(&g_executors[type][core].slot_state[slot],
                           EXE_SLOT_GATED, memory_order_release);
 
+#if ED_A10_FORCE_SELF_NOTIFY
+    /*
+     * A10 probe: 放大 "Hook2 先置 DISPATCHED、Hook1 后补 notify" 的竞争窗口。
+     * 仅测试宏开启时生效，不进入常规路径。
+     */
+    for (int spin = 0; spin < 200000; spin++) {
+        if (atomic_load_explicit(&g_spec_state[s_idx], memory_order_acquire) ==
+            ED_SPEC_DISPATCHED) {
+            break;
+        }
+        sched_yield();
+    }
+#endif
+
     uint32_t packed = ED_PACK_SLOT((uint16_t)core, (uint8_t)slot, (uint8_t)type);
     uint64_t record = ED_PACK_RECORD((uint32_t)s_id, packed);
     atomic_store_explicit(&g_staged_slot_record[s_idx], record, memory_order_seq_cst);
     atomic_fetch_add_explicit(&g_ed_stage_cnt, 1, memory_order_relaxed);
+
+#if ED_A10_FORCE_SELF_NOTIFY
+    /*
+     * A10 probe only: 强制走 Hook1 自敲分支，专门验证 notify_once 单写语义。
+     * 该宏仅测试脚本注入，不进入常规构建。
+     */
+    atomic_store_explicit(&g_spec_state[s_idx], ED_SPEC_DISPATCHED, memory_order_release);
+#endif
 
     if (atomic_load_explicit(&g_spec_state[s_idx], memory_order_seq_cst) ==
         ED_SPEC_DISPATCHED) {

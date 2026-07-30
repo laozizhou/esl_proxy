@@ -216,10 +216,9 @@ static inline int send_task(ctrl_t *ctrl, int type)
                                     memory_order_acquire) == EXE_SLOT_EMPTY);
         g_executors[exe_type][core].tasks[slot] = task_id;
         g_executors[exe_type][core].block_idx[slot] = 0;
-        // Scale down duration for faster simulation (divide by 10000 to handle large durations)
+        // Scale down duration for faster simulation (configurable via EXEC_DURATION_SCALE)
         uint32_t raw_duration = g_basic_buf[task_id & RING_MASK].duration;
-        g_executors[exe_type][core].duration[slot] =
-            (raw_duration > 10000) ? (uint16_t)(raw_duration / 10000) : 1;
+        g_executors[exe_type][core].duration[slot] = SCALE_EXEC_DURATION(raw_duration);
         g_executors[exe_type][core].idx = slot;  // Point to the slot with the new task
         
         if (slot == 1) {
@@ -253,6 +252,34 @@ static inline int send_task(ctrl_t *ctrl, int type)
     }
     return sent;
 }
+
+#if ED_ENABLE
+static inline uint64_t queue_count_snapshot(queue_t *q)
+{
+    uint64_t cnt;
+    lock_q(q);
+    cnt = q->cnt;
+    unlock_q(q);
+    return cnt;
+}
+
+static inline bool has_pending_ready_work(int tid)
+{
+    if (queue_count_snapshot(&g_ctrl_t[tid].ready_queue[TASK_TYPE_CUBE]) > 0) {
+        return true;
+    }
+    if (queue_count_snapshot(&g_ctrl_t[tid].ready_queue[TASK_TYPE_VECTOR]) > 0) {
+        return true;
+    }
+    if (queue_count_snapshot(&g_ctrl_t[tid].ready_queue[TASK_TYPE_MIX]) > 0) {
+        return true;
+    }
+    if (queue_count_snapshot(&g_ed_ready_queue) > 0) {
+        return true;
+    }
+    return false;
+}
+#endif
 
 int dispatch(int tid)
 {
@@ -290,9 +317,23 @@ void *dispatch_worker(void *arg)
     while (atomic_load(&g_completed_cnt) < atomic_load(&g_task_id)) {
         dispatch(tid);
     }
-    
-    atomic_store(&g_is_done, true);
+
     uint64_t end_ns = get_time_ns();
+
+#if ED_ENABLE
+    /*
+     * completion 达标后再冲洗一次 ready/ed queue，补齐 send_skip 统计；
+     * 不计入 scheduler elapsed，避免把统计收口开销混进性能口径。
+     */
+    for (int i = 0; i < RING_SIZE; i++) {
+        if (!has_pending_ready_work(tid)) {
+            break;
+        }
+        dispatch(tid);
+    }
+#endif
+
+    atomic_store(&g_is_done, true);
     uint64_t elapsed_ns = end_ns - start_ns;
 
     MAIN_LOGF("[scheduler] task_cnt = %u", g_completed_cnt);
