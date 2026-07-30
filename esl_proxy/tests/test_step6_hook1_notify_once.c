@@ -197,9 +197,14 @@ static void test_step6_hook2_only_releases_on_unfin_zero(void)
               "Hook2: spec_state should become DISPATCHED on 1->0");
     expect_u8(atomic_load_explicit(&g_notify_claimed[s_idx], memory_order_acquire), 1,
               "Hook2: notify_once should claim exactly once");
+    /*
+     * 新协议：notify 只敲门铃，不翻转 slot_state。
+     * GATED->RUNNABLE 由 executor 轮询门铃后自行完成，本测试不跑 executor，
+     * 因此槽位应仍为 GATED、门铃为 1。
+     */
     expect_u8(
         atomic_load_explicit(&g_executors[type][core].slot_state[slot], memory_order_acquire),
-        EXE_SLOT_RUNNABLE, "Hook2: released task must become RUNNABLE");
+        EXE_SLOT_GATED, "Hook2: notify must not flip slot_state; executor opens the gate");
     expect_u8(atomic_load_explicit(&g_executors[type][core].doorbell[slot], memory_order_relaxed), 1,
               "Hook2: winner should write doorbell once");
     expect_u64(atomic_load_explicit(&g_ed_hit_cnt, memory_order_relaxed), 1,
@@ -245,7 +250,7 @@ static void test_step6_notify_once_deduplicates_cross_sources(void)
                "notify_once: second Hook1 call should not increment self counter");
     expect_u8(
         atomic_load_explicit(&g_executors[type][core].slot_state[slot], memory_order_acquire),
-        EXE_SLOT_RUNNABLE, "notify_once: slot should be RUNNABLE after first winner");
+        EXE_SLOT_GATED, "notify_once: slot stays GATED until executor polls the doorbell");
     expect_u8(atomic_load_explicit(&g_executors[type][core].doorbell[slot], memory_order_relaxed), 1,
               "notify_once: doorbell should be set exactly once by winner");
 }

@@ -80,9 +80,10 @@ static void test_step7_hook2_notify_path(void)
 
     expect_u8(atomic_load_explicit(&g_notify_claimed[s_idx], memory_order_acquire), 1,
               "Hook2 notify: claim bit should become 1");
+    /* 新协议：notify 只敲门铃；开闸是 executor 的职责，本测试不跑 executor */
     expect_u8(
         atomic_load_explicit(&g_executors[type][core].slot_state[slot], memory_order_acquire),
-        EXE_SLOT_RUNNABLE, "Hook2 notify: slot should become RUNNABLE");
+        EXE_SLOT_GATED, "Hook2 notify: slot must stay GATED until executor opens the gate");
     expect_u8(atomic_load_explicit(&g_executors[type][core].doorbell[slot], memory_order_relaxed),
               1, "Hook2 notify: doorbell should be set to 1");
     expect_u64(atomic_load_explicit(&g_ed_hit_cnt, memory_order_relaxed), 1,
@@ -120,7 +121,7 @@ static void test_step7_hook1_self_notify_path(void)
               "Hook1 self-notify: claim bit should become 1");
     expect_u8(
         atomic_load_explicit(&g_executors[type][core].slot_state[slot], memory_order_acquire),
-        EXE_SLOT_RUNNABLE, "Hook1 self-notify: slot should become RUNNABLE");
+        EXE_SLOT_GATED, "Hook1 self-notify: slot must stay GATED until executor opens the gate");
     expect_u8(atomic_load_explicit(&g_executors[type][core].doorbell[slot], memory_order_relaxed),
               1, "Hook1 self-notify: doorbell should be set to 1");
     expect_u64(atomic_load_explicit(&g_ed_hit_cnt, memory_order_relaxed), 0,

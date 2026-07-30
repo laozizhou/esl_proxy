@@ -1,0 +1,9 @@
+case,ed_enable,elapsed_ns_median,task_tp_median,stage_cnt,hit_cnt,self_notify_cnt,doorbell_ratio,self_notify_ratio,slot_retry_cnt,send_skip_cnt,speedup,throughput_gain,lat_normal_mean_ns,lat_normal_p50_ns,lat_ed_mean_ns,lat_ed_p50_ns,lat_ed_samples,lat_x_inrun,lat_x_baseline
+paged_attention_unroll.h,0,423000,4.539007,,,,,,,,,,1513.200000,2048,,,0,,
+paged_attention_unroll.h,1,469000,4.093817,960,960,0,1.000000,0.000000,0,960,0.901919,-0.098081,33081.900000,57250,1286.800000,2048,960,25.708657,1.175940
+paged_attention_unroll_manual_scope.h,0,247000,7.773279,,,,,,,,,,3224.400000,4096,,,0,,
+paged_attention_unroll_manual_scope.h,1,388000,4.948453,960,960,0,1.000000,0.000000,0,960,0.636598,-0.363402,66777.200000,94250,1425.400000,2048,960,46.848043,2.262102
+qwen3_dynamic_manual_scope.h,0,214000,4.037383,,,,,,,,,,3040.200000,2048,,,0,,
+qwen3_dynamic_manual_scope.h,1,220000,3.927273,12,12,0,1.000000,0.000000,0,12,0.972727,-0.027273,3408.600000,4096,614.300000,1024,12,5.548755,4.949048
+qwen3_dynamic_tensormap.h,0,358000,2.413408,,,,,,,,,,1151.900000,2048,,,0,,
+qwen3_dynamic_tensormap.h,1,517000,1.671180,12,12,0,1.000000,0.000000,0,12,0.692456,-0.307544,3089.300000,4096,697.800000,1024,12,4.427200,1.650760

@@ -124,6 +124,10 @@ int main(void) {
     MAIN_LOGF("[ed] block_cas_fail_cnt = %llu", (unsigned long long)block_cas_fail_cnt);
     MAIN_LOGF("[ed] send_skip_cnt = %llu", (unsigned long long)send_skip_cnt);
     MAIN_LOGF("[ed] late_arrival_cnt = %llu", (unsigned long long)late_arrival_cnt);
+    /* 对账：notify 只敲门铃，实际开闸由 executor 完成，两者应一一对应 */
+    MAIN_LOGF("[ed] gate_open_cnt = %llu",
+              (unsigned long long)atomic_load_explicit(&g_ed_gate_open_cnt,
+                                                       memory_order_relaxed));
 
     if (stage_cnt > 0) {
         double doorbell_ratio = (double)(hit_cnt + self_notify_cnt) / (double)stage_cnt;

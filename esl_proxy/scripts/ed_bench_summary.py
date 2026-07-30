@@ -74,6 +74,7 @@ def parse_record(path: str):
         "leaked_staging": extract_int(r"\[ed\] leaked_staging = (\d+)", text),
         "block_leaked": extract_int(r"\[ed\] block_leaked = (\d+)", text),
         "slot_leaked": extract_int(r"\[ed\] slot_leaked = (\d+)", text),
+        "gate_open_cnt": extract_int(r"\[ed\] gate_open_cnt = (\d+)", text),
         "notify_counter": notify_counter,
         "worker_log": worker_log,
         # ready->runnable 延迟：ED 的直接 KPI，normal/ed 两条路径分开
@@ -158,6 +159,18 @@ def check_assertions(records, repo_root):
             errors.append(f"A8 missing slot_leaked: {r['path']}")
         elif r["slot_leaked"] != 0:
             errors.append(f"A8 fail {r['path']}: slot_leaked={r['slot_leaked']}")
+
+        # 门铃协议对账：notify 只敲门铃，实际开闸由 executor 完成，
+        # 每次成功通知必须恰好换来一次开闸，否则说明有通知被丢或被重复消费。
+        if r["gate_open_cnt"] is None:
+            errors.append(f"GATE missing gate_open_cnt: {r['path']}")
+        elif None not in (r["hit_cnt"], r["self_notify_cnt"]):
+            notified = r["hit_cnt"] + r["self_notify_cnt"]
+            if r["gate_open_cnt"] != notified:
+                errors.append(
+                    f"GATE fail {r['path']}: gate_open={r['gate_open_cnt']} "
+                    f"hit+self={notified}"
+                )
 
         # KPI 自洽：每个被 staged 且成功放行的任务贡献恰好一个 ED 路径样本，
         # 所以样本数不应超过 stage_cnt；stage 了却收不到样本说明打点漏了。

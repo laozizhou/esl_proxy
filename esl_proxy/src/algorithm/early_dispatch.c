@@ -56,6 +56,8 @@ _Atomic uint64_t g_ed_late_arrival_cnt;
 _Atomic uint64_t g_ed_hook0_contrib_cnt;
 #endif
 
+_Atomic uint64_t g_ed_gate_open_cnt;
+
 _Atomic uint64_t g_ed_ready_ns[RING_SIZE];
 _Atomic uint32_t g_ed_ready_tag[RING_SIZE];
 _Atomic uint64_t g_ed_lat_cnt[ED_LAT_PATH_CNT];
@@ -205,6 +207,7 @@ void ed_init(void)
     atomic_store_explicit(&g_ed_block_cas_fail_cnt, 0, memory_order_relaxed);
     atomic_store_explicit(&g_ed_send_skip_cnt, 0, memory_order_relaxed);
     atomic_store_explicit(&g_ed_late_arrival_cnt, 0, memory_order_relaxed);
+    atomic_store_explicit(&g_ed_gate_open_cnt, 0, memory_order_relaxed);
 #if ED_HOOK0_CONTRIB_STATS
     atomic_store_explicit(&g_ed_hook0_contrib_cnt, 0, memory_order_relaxed);
 #endif
@@ -314,15 +317,15 @@ void ed_notify_once(uint32_t task_id, uint64_t record, ed_notify_source_t source
         return;
     }
 
-    uint8_t expected_state = EXE_SLOT_GATED;
-    if (!atomic_compare_exchange_strong_explicit(
-            &g_executors[type][core].slot_state[slot], &expected_state,
-            EXE_SLOT_RUNNABLE, memory_order_acq_rel, memory_order_acquire)) {
-        return;
-    }
-    /* KPI 终点（ED 放行路径）：CAS 成功即该任务由门禁态转为可执行 */
-    ed_lat_mark_runnable((uint16_t)task_id, ED_LAT_EARLY);
-
+    /*
+     * notify 只负责敲门铃，不改 slot_state：
+     * GATED->RUNNABLE 的翻转、门铃清零、KPI 收口统一由 executor 完成，
+     * 对应硬件语义「AI Core 轮询到 doorbell 置位后自行启动」。
+     *
+     * 去掉原先这里的 slot_state CAS 不削弱 ABA 防护：上面已用 g_ring_task_tag
+     * 与 g_staged_slot_record 做过换代校验，g_notify_claimed 保证唯一写者，
+     * 而 executor 侧 CAS(expect GATED) 是最后一道「槽位仍在门禁态」的把关。
+     */
     atomic_store_explicit(&g_executors[type][core].doorbell[slot], 1, memory_order_release);
     WORKER_LOGF("notify_write, s=%u, source=%s",
                 task_id, (source == ED_NOTIFY_HOOK2) ? "hook2" : "hook1");
@@ -508,6 +511,11 @@ int try_early_dispatch(int tid)
 
     assert(atomic_load_explicit(&g_executors[type][core].slot_state[slot],
                                 memory_order_acquire) == EXE_SLOT_EMPTY);
+    /*
+     * 必须在发布 GATED 之前清门铃：吸收上一代残留通知，否则 executor 可能
+     * 拿旧门铃把本代任务提前放行。用 relaxed 足够——下面发布 GATED 的
+     * release 存储会保证本次清零对任何 acquire 侧可见。
+     */
     atomic_store_explicit(&g_executors[type][core].doorbell[slot], 0,
                           memory_order_relaxed);
     g_executors[type][core].tasks[slot] = s_id;

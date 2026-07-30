@@ -14,6 +14,7 @@
 #include "executor.h"
 #include "dispatch.h"
 #include "early_dispatch.h"
+#include "ed_gate.h"
 #include "ring_buf.h"
 
 #ifndef ED_A11_PROBE
@@ -107,14 +108,21 @@ void* executor_worker(void *arg)
                 for (int slot = 0; slot < AIC_OSTD; slot++) {
                     uint8_t state = atomic_load_explicit(&e->slot_state[slot],
                                                          memory_order_acquire);
+#if ED_ENABLE
+                    /*
+                     * 非 RUNNABLE（EMPTY 或 GATED）才轮询门铃：
+                     * 开闸成功就本 tick 直接开跑，不必再等下一轮扫描。
+                     */
+                    if (state != EXE_SLOT_RUNNABLE) {
+                        if (!ed_poll_doorbell(exe_type, core, slot)) {
+                            continue;
+                        }
+                    }
+#else
                     /* EMPTY/GATED 都不执行；只有 RUNNABLE 才 tick。 */
                     if (state != EXE_SLOT_RUNNABLE) {
                         continue;
                     }
-
-#if ED_ENABLE
-                    /* Step 2: doorbell 仅做硬件信号占位，清零不影响 gate 判据。 */
-                    atomic_store_explicit(&e->doorbell[slot], 0, memory_order_relaxed);
 #endif
 
                     uint16_t task_id = e->tasks[slot];

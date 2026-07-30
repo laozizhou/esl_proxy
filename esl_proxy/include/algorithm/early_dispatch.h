@@ -129,6 +129,13 @@ extern _Atomic uint64_t g_ed_block_cas_fail_cnt;
 extern _Atomic uint64_t g_ed_send_skip_cnt;
 extern _Atomic uint64_t g_ed_late_arrival_cnt;
 
+/*
+ * g_ed_gate_open_cnt：executor 侧真正完成 GATED->RUNNABLE 翻转的次数。
+ * notify 改为只敲门铃后，hit_cnt/self_notify_cnt 的含义变成"发出通知的次数"，
+ * 需要本计数与之对账：健康态应有 gate_open_cnt == hit_cnt + self_notify_cnt。
+ */
+extern _Atomic uint64_t g_ed_gate_open_cnt;
+
 #if ED_HOOK0_CONTRIB_STATS
 extern _Atomic uint64_t g_ed_hook0_contrib_cnt;
 #endif
