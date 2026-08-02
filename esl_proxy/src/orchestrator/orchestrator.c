@@ -22,7 +22,7 @@ struct desc_thread_arg {
 };
 
 int desc_thread_count = DESC_THREAD_COUNT;
-int desc_batch_size = 240 / DESC_THREAD_COUNT;
+int desc_batch_size = 16;
 
 static void *alloc_thread_func(void *arg)
 {
@@ -45,7 +45,7 @@ int main(int argc, char *argv[])
 {
     if (argc >= 2) {
         desc_thread_count = atoi(argv[1]);
-        desc_batch_size = 240 / desc_thread_count;
+        desc_batch_size = (240 / desc_thread_count & 15 + 1) * 16;
         if (desc_thread_count <= 0) {
             fprintf(stderr, "Usage: %s [desc_desc_thread_count]  (default %d)\n",
                     argv[0], DESC_THREAD_COUNT);
