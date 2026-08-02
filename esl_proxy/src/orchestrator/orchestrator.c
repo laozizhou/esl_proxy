@@ -12,12 +12,13 @@
  * symbol conflicts between qwen3_14b_decoder_alloc.h and
  * qwen3_14b_decoder_desc.h) */
 void orc_alloc_call(uint64_t orch_args);
-int orc_desc_call(uint64_t orch_args, int thread_id);
+int orc_desc_call(uint64_t orch_args, int thread_id, int *created_cnt);
 
 struct desc_thread_arg {
     uint64_t orch_args;
     int thread_id;
     int task_count;
+    int created_cnt;
     uint64_t elapsed_ns;
 };
 
@@ -35,7 +36,7 @@ static void *desc_thread_func(void *arg)
 {
     struct desc_thread_arg *targ = (struct desc_thread_arg *)arg;
     uint64_t t0 = get_time_ns();
-    targ->task_count = orc_desc_call(targ->orch_args, targ->thread_id);
+    targ->task_count = orc_desc_call(targ->orch_args, targ->thread_id, &targ->created_cnt);
     uint64_t t1 = get_time_ns();
     targ->elapsed_ns = t1 - t0;
     return NULL;
@@ -75,7 +76,7 @@ int main(int argc, char *argv[])
         return 1;
     }
     for (int i = 0; i < desc_thread_count; i++) {
-        desc_args[i].orch_args = (uint64_t)i * 20;
+        desc_args[i].orch_args = 0;
         desc_args[i].thread_id = i;
         pthread_create(&desc_threads[i], NULL, desc_thread_func, &desc_args[i]);
     }
@@ -86,22 +87,25 @@ int main(int argc, char *argv[])
 
     end_ns = get_time_ns();
     elapsed_ns = end_ns - start_ns;
-    printf("orchestrator total elapsed time (1 alloc + %d desc threads): %llu ns\n",
-           desc_thread_count, (unsigned long long)elapsed_ns);
-
     /* Print per-thread throughput: desc_task_id / execution_time (MTasks/s) */
     printf("desc_thread throughput (MTasks/s):\n");
+    int total_cnt = 0;
     for (int i = 0; i < desc_thread_count; i++) {
         uint64_t us = desc_args[i].elapsed_ns / 1000ULL;
         if (us == 0) us = 1;
         /* throughput = tasks / us   (because MTasks/s = tasks / (us * 1e-6) * 1e-6 = tasks / us) */
         double throughput = (double)desc_args[i].task_count / (double)us;
-        printf("  thread %2d: tasks=%d  time=%llu us  throughput=%.2f MTasks/s\n",
+        printf("  thread %2d: tasks=%d  created=%d  time=%llu us  throughput=%.2f MTasks/s\n",
                desc_args[i].thread_id,
                desc_args[i].task_count,
+               desc_args[i].created_cnt,
                (unsigned long long)us,
                throughput);
+        total_cnt += desc_args[i].created_cnt;
     }
+    printf("orchestrator total elapsed time (1 alloc + %d desc threads): %llu ns\n",
+           desc_thread_count, (unsigned long long)elapsed_ns);
+    printf("desc=%d\n", total_cnt);
     free(desc_args);
     free(desc_threads);
     return 0;
