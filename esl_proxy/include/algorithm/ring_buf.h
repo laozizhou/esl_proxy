@@ -25,6 +25,12 @@
 
 #include "tensor.h"
 
+struct node_list {
+    uint32_t cnt;
+    uint32_t node[CON_NODE_CNT];
+    struct node_list* next;
+};
+
 extern atomic_int g_task_id;
 extern atomic_int g_min_uncomplete_task;
 extern atomic_flag g_lock_buf[RING_SIZE];
