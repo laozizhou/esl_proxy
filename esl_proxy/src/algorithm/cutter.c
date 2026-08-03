@@ -53,7 +53,7 @@ void add_successors(uint32_t ready_cnt[], uint32_t rq_buf[][RQ_BATCH_SIZE]) {
     uint32_t end = atomic_load(&g_task_id);
     uint32_t tmp = g_commit_task_id + PRE_BATCH_SIZE;
     end = tmp > end ? end : tmp;
-    while ( g_commit_task_id <= end)
+    while ( g_commit_task_id < end)
     {
         uint32_t task_idx = g_commit_task_id;
         struct predecessor_list *ptr = &g_predecessors[task_idx];
