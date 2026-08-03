@@ -19,6 +19,7 @@ endif
 
 OBJ_DIR  := build/orchestrator
 TARGET   := bin/orchestrator
+TARGET_AP := bin/orchestrator_ap
 
 SRCS := \
     esl_proxy/src/orchestrator/orchestrator.c \
@@ -27,15 +28,28 @@ SRCS := \
     esl_proxy/src/algorithm/log.c \
     esl_proxy/src/algorithm/shm.c
 
-OBJS := $(patsubst esl_proxy/src/%.c,$(OBJ_DIR)/%.o,$(SRCS))
-DEPS := $(OBJS:.o=.d)
+SRCS_AP := \
+    esl_proxy/src/orchestrator/orchestrator.c \
+    esl_proxy/src/orchestrator/orc_alloc.c \
+    esl_proxy/src/orchestrator/orc_desc_ap.c \
+    esl_proxy/src/algorithm/log.c \
+    esl_proxy/src/algorithm/shm.c
 
-.PHONY: all run clean
+OBJS := $(patsubst esl_proxy/src/%.c,$(OBJ_DIR)/%.o,$(SRCS))
+OBJS_AP := $(patsubst esl_proxy/src/%.c,$(OBJ_DIR)/%.o,$(SRCS_AP))
+DEPS := $(OBJS:.o=.d) $(OBJS_AP:.o=.d)
+
+.PHONY: all ap run run-ap clean
 
 all: $(TARGET)
 
+ap: $(TARGET_AP)
+
 $(TARGET): $(OBJS) | bin
 	$(CC) $(CFLAGS) $(OBJS) -o $@ $(LDFLAGS)
+
+$(TARGET_AP): $(OBJS_AP) | bin
+	$(CC) $(CFLAGS) $(OBJS_AP) -o $@ $(LDFLAGS)
 
 $(OBJ_DIR)/%.o: esl_proxy/src/%.c
 	@mkdir -p $(dir $@)
@@ -47,7 +61,10 @@ $(OBJ_DIR) bin:
 run: all
 	./$(TARGET)
 
+run-ap: ap
+	./$(TARGET_AP)
+
 clean:
-	rm -rf $(OBJ_DIR) $(TARGET)
+	rm -rf $(OBJ_DIR) $(TARGET) $(TARGET_AP)
 
 -include $(DEPS)
