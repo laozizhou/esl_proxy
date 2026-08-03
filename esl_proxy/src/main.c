@@ -53,11 +53,18 @@ int main(void) {
     }
 #endif
 
+#if ORCHESTRATION_TIME
+    uint64_t init_start_ns = get_time_ns();
+#endif
     mem_pool_init(&g_mem_pool, g_mem_pool_storage, sizeof g_mem_pool_storage);
     mem_pool_init_fifo(&g_mem_pool, g_when2free_entries, WHEN2FREE_CAP);
     ring_buf_init();
     init_predecessors();
     init_ctrl_t();
+#if ORCHESTRATION_TIME
+    uint64_t init_end_ns = get_time_ns();
+    MAIN_LOGF("[init] duration = %llu ns", (unsigned long long)(init_end_ns - init_start_ns));
+#endif
     
     // executor_init();
 
