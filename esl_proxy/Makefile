@@ -1,15 +1,19 @@
 # esl_proxy build
 #
 # Usage:
-#   make          # default: qwen3_dynamic_manual_scope.h, QWEN3_SPMD_TIER=2
+#   make          # default: qwen3_dynamic_manual_scope.h, THREAD_CNT=1
 #   make run
 #   make run WORKER_LOG=1
 #
 # Cases (cases/*.h):
 #   make CASE=qwen3_dynamic_manual_scope.h run
 #   make CASE=qwen3_dynamic_tensormap.h run
+#   make CASE=qwen3_14b_decode_subgraph.h run
 #   make CASE=paged_attention_unroll.h run
 #   make CASE=paged_attention_unroll_manual_scope.h run
+#
+# Thread count (default 1):
+#   make CASE=qwen3_14b_decode_subgraph.h THREAD_CNT=2 run
 #
 # Qwen3 SPMD tier (0=non-spmd .. 4=all-spmd; default 2 = spmd-4 for qwen3 cases):
 #   make CASE=qwen3_dynamic_tensormap.h QWEN3_SPMD_TIER=0 run
@@ -34,11 +38,15 @@ endif
 
 QWEN3_CASES := qwen3_dynamic_manual_scope.h qwen3_dynamic_tensormap.h
 
+# Thread count for cutter/dispatch threads (default: 1)
+THREAD_CNT ?= 1
+
 CC       := cc
 # -MMD -MP emits a .d alongside each .o listing the headers it included, so a
 # change to any include/algorithm/*.h (e.g. tensormap.h) rebuilds the dependent objects.
 CFLAGS   := -g -std=c11 -Wall -Wextra -pedantic -O2 -D_POSIX_C_SOURCE=199309L \
-	-I include/algorithm -I cases -DORCH_CASE=$(CASE) -MMD -MP -Wno-error=implicit-function-declaration
+	-I include/algorithm -I cases -DORCH_CASE=$(CASE) -MMD -MP -Wno-error=implicit-function-declaration \
+	-DCUTTER_THREAD_CNT=$(THREAD_CNT) -DDISPATCH_THREAD_CNT=$(THREAD_CNT)
 
 # -latomic is needed on Linux but not on macOS (clang)
 UNAME_S  := $(shell uname -s)

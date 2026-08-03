@@ -19,8 +19,12 @@
 #define RQ_BATCH_SIZE 512
 #define DISPATCH_COMPLETE_BATCH 512
 
+#ifndef PAINTER_THREAD_CNT
 #define PAINTER_THREAD_CNT 2
+#endif
+#ifndef DISPATCH_THREAD_CNT
 #define DISPATCH_THREAD_CNT 2
+#endif
 #define AIC_CNT_PER_THREAD 32
 
 /* 1: compile in worker logs; toggle at runtime via g_worker_log or WORKER_LOG env */

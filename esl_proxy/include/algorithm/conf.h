@@ -18,8 +18,12 @@
 #define RQ_BATCH_SIZE 512
 #define DISPATCH_COMPLETE_BATCH 512
 
+#ifndef CUTTER_THREAD_CNT
 #define CUTTER_THREAD_CNT 1
+#endif
+#ifndef DISPATCH_THREAD_CNT
 #define DISPATCH_THREAD_CNT 1
+#endif
 
 /* 1: compile in worker logs; toggle at runtime via g_worker_log or WORKER_LOG env */
 #define WORKER_LOG 1

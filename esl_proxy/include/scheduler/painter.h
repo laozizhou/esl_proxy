@@ -9,8 +9,16 @@
 
 #include "scheduler/conf.h"
 #include "scheduler/dispatch.h"
-// #include "scheduler/template_graph.h"
-#include "cases/qwen3_14b_decode_subgraph.h"
+
+#ifndef SCHEDULER_CASE
+#define SCHEDULER_CASE cases/qwen3_14b_decode_subgraph.h
+#endif
+
+/* Macro to stringify the include directive properly */
+#define __INCLUDE(x) #x
+#define _INCLUDE_FILE(x) __INCLUDE(x)
+#include _INCLUDE_FILE(SCHEDULER_CASE)
+
 #include "common/task.h"
 #include "common/queue.h"
 
