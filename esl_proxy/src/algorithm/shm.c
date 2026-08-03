@@ -41,10 +41,7 @@ void init_predecessors(void)
         g_predecessors[i].exp = NULL;
     }
 #ifdef ENABLE_DAG_DEDUP
-    uint64_t ancestors_start_ns = get_time_ns();
     memset(g_ancestors, 0, sizeof(g_ancestors));
-    uint64_t ancestors_end_ns = get_time_ns();
-    MAIN_LOGF("[init] ancestors_memset_ns = %llu (size=%zu bytes)", (unsigned long long)(ancestors_end_ns - ancestors_start_ns), sizeof(g_ancestors));
 #endif /* ENABLE_DAG_DEDUP */
 }
 
