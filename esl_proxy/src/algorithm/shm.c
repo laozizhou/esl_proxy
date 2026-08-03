@@ -36,12 +36,19 @@ ctrl_t g_ctrl_t[DISPATCH_THREAD_CNT];
 
 void init_predecessors(void)
 {
+    uint64_t diag_start_ns = get_time_ns();
     for (size_t i = 0; i < RING_SIZE; i++) {
         g_predecessors[i].cnt = 0;
         g_predecessors[i].exp = NULL;
     }
 #ifdef ENABLE_DAG_DEDUP
+    uint64_t diag_before_memset_ns = get_time_ns();
     memset(g_ancestors, 0, sizeof(g_ancestors));
+    uint64_t diag_after_memset_ns = get_time_ns();
+    MAIN_LOGF("[diag] predecessors_loop_ns = %llu", (unsigned long long)(diag_before_memset_ns - diag_start_ns));
+    MAIN_LOGF("[diag] ancestors_memset_ns = %llu (size=%zu bytes)", (unsigned long long)(diag_after_memset_ns - diag_before_memset_ns), sizeof(g_ancestors));
+#else
+    MAIN_LOGF("[diag] predecessors_loop_ns = %llu", (unsigned long long)(get_time_ns() - diag_start_ns));
 #endif /* ENABLE_DAG_DEDUP */
 }
 
