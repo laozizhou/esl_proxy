@@ -23,7 +23,7 @@ struct desc_thread_arg {
 };
 
 int desc_thread_count = DESC_THREAD_COUNT;
-int desc_batch_size = 16;
+int desc_batch_size = 128;
 
 static void *alloc_thread_func(void *arg)
 {
@@ -46,7 +46,7 @@ int main(int argc, char *argv[])
 {
     if (argc >= 2) {
         desc_thread_count = atoi(argv[1]);
-        desc_batch_size = (240 / desc_thread_count & 15 + 1) * 16;
+        desc_batch_size = (240 / desc_thread_count & 127 + 1) * 128;
         if (desc_thread_count <= 0) {
             fprintf(stderr, "Usage: %s [desc_desc_thread_count]  (default %d)\n",
                     argv[0], DESC_THREAD_COUNT);
@@ -91,15 +91,13 @@ int main(int argc, char *argv[])
     printf("desc_thread throughput (MTasks/s):\n");
     int total_cnt = 0;
     for (int i = 0; i < desc_thread_count; i++) {
-        uint64_t us = desc_args[i].elapsed_ns / 1000ULL;
-        if (us == 0) us = 1;
         /* throughput = tasks / us   (because MTasks/s = tasks / (us * 1e-6) * 1e-6 = tasks / us) */
-        double throughput = (double)desc_args[i].task_count / (double)us;
-        printf("  thread %2d: tasks=%d  created=%d  time=%llu us  throughput=%.2f MTasks/s\n",
+        double throughput = (double)desc_args[i].task_count / (double)desc_args[i].elapsed_ns * (double)1000.0;
+        printf("  thread %2d: tasks=%d  created=%d  time=%llu ns  throughput=%.2f MTasks/s\n",
                desc_args[i].thread_id,
                desc_args[i].task_count,
                desc_args[i].created_cnt,
-               (unsigned long long)us,
+               (unsigned long long)desc_args[i].elapsed_ns,
                throughput);
         total_cnt += desc_args[i].created_cnt;
     }
