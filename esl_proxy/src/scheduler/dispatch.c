@@ -9,7 +9,7 @@
 
 #include "scheduler/dispatch.h"
 #include "common/task.h"
-#include "common/log.h"
+// #include "common/log.h"
 #include "platform/a6.h"
 
 extern atomic_bool g_is_done;
@@ -130,7 +130,7 @@ static void hand_shake(int cpu_idx, uint64_t* aicore_spr[], int type, int ostd2_
         #ifdef REAL_CHIP
         *aicore_spr[i] = HAND_SHAKE_VAL | (msgq_addr & LOAW_ADDR_MASK);
         #endif
-        // WORKER_LOGF("cpu_idx,%d, index,%d, aicore_spr,%lx, msgq_addr,%lx", cpu_idx, i, aicore_spr[i], msgq_addr);
+        // // WORKER_LOGF("cpu_idx,%d, index,%d, aicore_spr,%lx, msgq_addr,%lx", cpu_idx, i, aicore_spr[i], msgq_addr);
     }
 }
 
@@ -166,7 +166,7 @@ static inline void get_completed(uint64_t* bitmap, uint32_t task_id[], int *comp
     while (cnt > 0) {
         uint64_t idx = (uint64_t)__builtin_ctzll(*bitmap);
         task_id[(*complete_cnt)] = task_id_map[idx];
-        WORKER_LOGF("completed,task_id,%u,complete_cnt,%d,core,%d,bitmap,%u",task_id_map[idx], *complete_cnt,  idx, *bitmap);
+        // WORKER_LOGF("completed,task_id,%u,complete_cnt,%d,core,%d,bitmap,%u",task_id_map[idx], *complete_cnt,  idx, *bitmap);
         (*complete_cnt)++;
         cnt--;
         *bitmap &= (*bitmap - 1);
@@ -195,7 +195,7 @@ static inline int send_task(ctrl_t *ctrl, int type)
                           & ctrl->aicore_mask;
     int free_demand = __builtin_popcountll(free_bitmap);
     if (free_demand <= 0) {
-        WORKER_LOGF("send,free_cnt,%d", free_demand);
+        // WORKER_LOGF("send,free_cnt,%d", free_demand);
         return 0;
     }
     uint32_t task_ids[AIC_CNT];
@@ -212,8 +212,8 @@ static inline int send_task(ctrl_t *ctrl, int type)
             uint32_t want = (uint32_t)free_demand;
             if (batch_dequeue(&g_ctrl_t[v].ready_queue[type], task_ids, &want)) {
                 got = want;
-                WORKER_LOGF("steal,thief,%u,victim,%u,cnt,%u,type,%d",
-                            ctrl->tid, v, got, type);
+                // WORKER_LOGF("steal,thief,%u,victim,%u,cnt,%u,type,%d",
+                //             ctrl->tid, v, got, type);
                 stole = 1;
                 break;
             }
@@ -253,7 +253,7 @@ static inline int send_task(ctrl_t *ctrl, int type)
         ctrl->msg_bitmap[type][slot] |= mask;
         #endif
 
-        WORKER_LOGF("send,task_id,%u,core,%d,slot,%d,type,%d", task_id, core, slot, type);
+        // WORKER_LOGF("send,task_id,%u,core,%d,slot,%d,type,%d", task_id, core, slot, type);
         sent++;
         free_bitmap &= ~mask;
     }
@@ -278,7 +278,7 @@ void *dispatch_worker(void *arg)
 {
     int tid = (int)(intptr_t)arg;
     int total_sent = 0;
-    WORKER_LOGF("dispatch,%d,start", tid);
+    // WORKER_LOGF("dispatch,%d,start", tid);
 
     for (size_t i = 0; i < EXE_TYPE_CNT; i++)
     {        
@@ -294,6 +294,6 @@ void *dispatch_worker(void *arg)
         total_sent += dispatch(tid);
         is_done = atomic_load(&g_is_done);
     }
-    WORKER_LOGF("dispatch,%d,done", tid);
+    // WORKER_LOGF("dispatch,%d,done", tid);
     return NULL;
 }
