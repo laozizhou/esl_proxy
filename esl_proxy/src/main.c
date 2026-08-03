@@ -102,6 +102,13 @@ int main(void) {
     }
     // pthread_join(manager_thread, NULL);
 
+#if ORCHESTRATION_TIME
+    uint64_t total_end_ns = get_time_ns();
+    uint64_t total_elapsed_ns = total_end_ns - total_start_ns;
+    MAIN_LOGF("[total] elapsed_time = %llu ns", (unsigned long long)total_elapsed_ns);
+    MAIN_LOGF("[total] task_tp = %f MTasks/s", (float)(g_task_id * 1000.0 / total_elapsed_ns));
+#endif
+
 #if WORKER_LOG
     log_close();
 #endif
