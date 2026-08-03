@@ -122,10 +122,12 @@ static inline bool new_task(uint32_t task_id, uint32_t type, uint32_t count, uin
     }
     if (count > 1)
         g_basic_buf[task_id & RING_MASK].mode = ORG_MODE_SPMD_SYNC;
+    g_basic_buf[task_id & RING_MASK].type = (task_type_t)type;
     g_basic_buf[task_id & RING_MASK].count = count; 
     g_basic_buf[task_id & RING_MASK].duration = duration;
     g_subtask_cnt += count;
     WORKER_LOGF("new,task_id,%u,type,%d,subtask_cnt,%d", task_id, type, count);
+    return true;
 }
 
 #endif /* DAG_RING_BUF_H */

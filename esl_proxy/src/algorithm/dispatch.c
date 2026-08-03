@@ -19,11 +19,36 @@ extern ctrl_t g_ctrl_t[DISPATCH_THREAD_CNT];
 extern struct task_desc g_basic_buf[RING_SIZE];
 extern executor_t g_executors[EXE_TYPE_CNT][AIC_CNT];
 
-static inline uint64_t get_time_ns(void)
+void init_ctrl_t(void)
 {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (uint64_t)ts.tv_sec * 1000000000ULL + ts.tv_nsec;
+    for (int tid = 0; tid < DISPATCH_THREAD_CNT; tid++) {
+        g_ctrl_t[tid].tid = (uint16_t)tid;
+
+        for (int i = 0; i < TASK_TYPE_CNT; i++) {
+            for (int j = 0; j < AIC_OSTD; j++) {
+                g_ctrl_t[tid].free_bitmap[i][j] = (uint64_t)((1ULL << AIC_CNT) - 1);
+            }
+        }
+        for (int i = 0; i < EXE_TYPE_CNT; i++) {
+            for (int j = 0; j < AIC_OSTD; j++) {
+                g_ctrl_t[tid].msg_bitmap[i][j] = 0x0;
+            }
+        }
+
+        for (int i = 0; i < EXE_TYPE_CNT; i++) {
+            for (int j = 0; j < AIC_CNT; j++) {
+                g_ctrl_t[tid].task_id_map1[i][j] = 0;
+                g_ctrl_t[tid].task_id_map2[i][j] = 0;
+            }
+        }
+
+        for (int i = 0; i < TASK_TYPE_CNT; i++) {
+            memset(&g_ctrl_t[tid].ready_queue[i], 0, sizeof(queue_t));
+            atomic_flag_clear_explicit(&g_ctrl_t[tid].ready_queue[i].lock, memory_order_release);
+        }
+        memset(&g_ctrl_t[tid].completed_queue, 0, sizeof(queue_t));
+        atomic_flag_clear_explicit(&g_ctrl_t[tid].completed_queue.lock, memory_order_release);
+    }
 }
 
 static inline void set_mix(int tid)
@@ -80,7 +105,7 @@ static inline int send_task(ctrl_t *ctrl, int type)
     int exe_type = type;
     // Check both slots - slot is free if neither slot 0 nor slot 1 has been sent a task
     uint64_t free_bitmap = ctrl->free_bitmap[type][0] & ctrl->free_bitmap[type][1];
-    int cnt = __builtin_popcountll(free_bitmap);
+    uint32_t cnt = (uint32_t)__builtin_popcountll(free_bitmap);
     if (cnt <= 0) {
         WORKER_LOGF("send,free_cnt,%d", cnt);
         return 0;
