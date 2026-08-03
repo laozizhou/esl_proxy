@@ -1,21 +1,31 @@
 # Makefile for scheduler (scheduler.c, dispatch.c, painter.c)
 #
 # Usage:
-#   make -f Makefile_scheduler        # compile
-#   make -f Makefile_scheduler run    # compile and run
-#            -D MAIN_LOG=1 -DWORKER_LOG=1 \
+#   make -f Makefile_scheduler             # compile with logging (default)
+#   make -f Makefile_scheduler run         # compile and run
+#   make -f Makefile_scheduler LOG=0       # compile without logging
+#   make -f Makefile_scheduler LOG=0 run   # compile and run without logging
+
+LOG ?= 1
 
 CC       := cc
 CFLAGS   := -g -std=c11 -Wall -O2 \
             -I esl_proxy/include \
-            -Wno-macro-redefined \
-            -DWORKER_LOG=1 -DLOG_OUTPUT_MODE=0
+            -Wno-macro-redefined
+
+ifeq ($(LOG),1)
+CFLAGS   += -DWORKER_LOG=1 -DLOG_OUTPUT_MODE=0
+LOG_SRCS := esl_proxy/src/scheduler/log.c
+else
+CFLAGS   += -DWORKER_LOG=0 -DLOG_OUTPUT_MODE=0
+LOG_SRCS :=
+endif
 
 UNAME_S  := $(shell uname -s)
 ifeq ($(UNAME_S),Linux)
-    LDFLAGS  := -lpthread -latomic
+    LDFLAGS  := -static -lpthread -latomic
 else
-    LDFLAGS  := -lpthread
+    LDFLAGS  := -static -lpthread
 endif
 
 BIN_DIR  := bin
@@ -25,7 +35,7 @@ SRCS := \
     esl_proxy/src/scheduler/scheduler.c \
     esl_proxy/src/scheduler/dispatch.c \
     esl_proxy/src/scheduler/painter.c \
-    esl_proxy/src/scheduler/log.c
+    $(LOG_SRCS)
 
 OBJS := $(patsubst esl_proxy/src/scheduler/%.c,$(BIN_DIR)/scheduler/%.o,$(SRCS))
 

@@ -12,9 +12,9 @@ CFLAGS   := -g -std=c11 -Wall -Wextra -pedantic -O2 -D_POSIX_C_SOURCE=199309L \
 # -latomic is needed on Linux but not on macOS (clang)
 UNAME_S  := $(shell uname -s)
 ifeq ($(UNAME_S),Linux)
-    LDFLAGS := -lpthread -latomic
+    LDFLAGS := -static -lpthread -latomic
 else
-    LDFLAGS := -lpthread
+    LDFLAGS := -static -lpthread
 endif
 
 OBJ_DIR  := build/orchestrator

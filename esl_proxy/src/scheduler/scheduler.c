@@ -83,6 +83,8 @@ int main(void) {
     uint64_t end_ns = get_time_ns();
     uint64_t duration = end_ns - start_ns;
     WORKER_LOGF("scheduler_duration,%lld/ns", duration);
+    printf("scheduler_throughput,%.2f,MTasks/s",
+                (float)(total_task_cnt * 1000.0 / duration));
     log_close();
     return 0;
 }
