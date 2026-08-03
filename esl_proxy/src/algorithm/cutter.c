@@ -153,6 +153,7 @@ void deal_completed_queue() {
 void *cutter_worker(void *arg)
 {
     int tid = (int)(intptr_t)arg;
+    uint64_t start_ns = get_time_ns();
     init_state_buf();
     while (!atomic_load(&g_is_done)) {
         deal_completed_queue();
@@ -161,6 +162,12 @@ void *cutter_worker(void *arg)
     while(g_commit_task_id < atomic_load(&g_task_id)){
         deal_completed_queue();
     }
+    uint64_t end_ns = get_time_ns();
+    uint64_t elapsed_ns = end_ns - start_ns;
+
     WORKER_LOGF("cutter, commit_tasks_cnt,%d,completed_task_cnt,%d ", g_commit_task_id, g_completed_task_cnt);
+    MAIN_LOGF("[cutter] task_cnt = %u", g_completed_task_cnt);
+    MAIN_LOGF("[cutter] duration = %llu ns", (unsigned long long)elapsed_ns);
+    MAIN_LOGF("[cutter] task_tp = %f MTasks/s", (float)(g_completed_task_cnt * 1000.0 / elapsed_ns));
     return NULL;
 }
