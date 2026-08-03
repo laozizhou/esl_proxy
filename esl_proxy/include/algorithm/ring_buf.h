@@ -74,8 +74,14 @@ static inline void ancestor_union(uint32_t dst, uint32_t src)
 struct ring_buf {
     uint32_t size;
     uint32_t* head;
-    uint32_t* _Atomic start;
-    uint32_t* _Atomic tail;
+    atomic_size_t start;   /* slot index into head[], not a pointer -- see add_predecessors().
+                            * GCC's atomic_fetch_add on a uint32_t* _Atomic does not scale by
+                            * sizeof(uint32_t) on at least two independent GCC builds we've
+                            * tested (MinGW/UCRT64 gcc 16.1.0 on Windows, and RHEL gcc 11.5.0
+                            * on Linux x86_64) -- confirmed with a standalone repro on both.
+                            * Clang does not have this bug. Using a plain atomic integer index
+                            * instead of an atomic pointer avoids the buggy code path entirely. */
+    atomic_size_t tail;
 };
 
 static inline void ring_buf_init(void)
@@ -84,8 +90,8 @@ static inline void ring_buf_init(void)
         g_successor_buf[i].next = NULL;
     }
     g_predecessor_ring.head = malloc(sizeof(uint32_t) * NODE_BUFF_SIZE);
-    atomic_store(&g_predecessor_ring.tail, g_predecessor_ring.head);
-    atomic_store(&g_predecessor_ring.start, g_predecessor_ring.head);
+    atomic_store(&g_predecessor_ring.tail, 0);
+    atomic_store(&g_predecessor_ring.start, 0);
 }
 
 /* input/output/inout tensors are all recorded the same way: append the
@@ -132,7 +138,7 @@ static int add_predecessors(uint32_t task_id, uint32_t target[], uint32_t n, uin
     struct predecessor_list *ptr = &g_predecessors[slotIdx];
     int cnt = start;
     if (ptr->cnt <= 0)
-        ptr->exp = atomic_load(&g_predecessor_ring.tail);
+        ptr->exp = g_predecessor_ring.head + atomic_load(&g_predecessor_ring.tail);
     
     uint32_t min_uncomplete_task = atomic_load_explicit(&g_min_uncomplete_task, memory_order_acquire);
     for (uint32_t i = 0; i < n; i++)
@@ -159,8 +165,8 @@ static int add_predecessors(uint32_t task_id, uint32_t target[], uint32_t n, uin
 #endif /* ENABLE_DAG_DEDUP */
 
         WORKER_LOGF("succeed,task_id,%u,predecessor_id,%u,idx,%d", task_id, target[i], cnt);
-        uint32_t* idx = atomic_fetch_add(&g_predecessor_ring.tail, 1);
-        *idx = target[i];
+        size_t idx = atomic_fetch_add(&g_predecessor_ring.tail, 1);
+        g_predecessor_ring.head[idx] = target[i];
         cnt++;
     }
     ptr->cnt = cnt;
