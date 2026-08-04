@@ -1,16 +1,26 @@
 #!/bin/bash
 # benchmark_dedup.sh - Compare baseline vs ENABLE_DAG_DEDUP scheduling throughput.
 #
-# Builds and runs the esl_proxy binary N times for both variants (with make
-# clean between every build, so EXTRA_CFLAGS toggles are never silently
-# skipped), and reports median/mean/min/max for the [init]/[orchestration]/
-# [scheduler]/[cutter]/[total] timing lines each run prints, including the
-# idle/active/drain phase split within [scheduler] and [cutter].
+# Builds and runs the esl_proxy binary N times total for both variants,
+# interleaved in rounds of ROUND_SIZE runs per variant (one build per variant
+# per round, not one build per single run) rather than all-baseline-then-
+# all-dedup. Straight block ordering was confirmed to let time-varying server
+# drift land unevenly across the two variants and produce a misleading
+# difference (seen first-hand comparing add_successors_calls block-ordered
+# vs interleaved) -- rounds keep that drift split fairly between both
+# variants while still keeping the rebuild count manageable (N/ROUND_SIZE
+# rounds x 2 builds, instead of N x 2 builds for full per-run interleaving).
+#
+# Reports median/mean/min/max for every [init]/[orchestration]/[scheduler]/
+# [cutter]/[total] timing and counter line each run prints, including the
+# idle/active/drain phase split and loop/busy iteration counts for
+# [scheduler]/[cutter], and the add_successors_* fields in [cutter].
 #
 # Usage (run from the esl_proxy/esl_proxy repo root):
-#   ./src/benchmark_dedup.sh [N_RUNS] [CASE] [SPMD_TIER]
+#   ./src/benchmark_dedup.sh [N_RUNS] [CASE] [SPMD_TIER] [ROUND_SIZE]
 #
-# Defaults: N_RUNS=30, CASE=qwen3_dynamic_tensormap.h, SPMD_TIER=2.
+# Defaults: N_RUNS=30, CASE=qwen3_dynamic_tensormap.h, SPMD_TIER=2,
+# ROUND_SIZE=10.
 # Note: QWEN3_SPMD_TIER=0 is a known-broken configuration unrelated to
 # dedup (a pre-existing fixed-size successor-list overflow in cutter.c);
 # avoid it here.
@@ -20,6 +30,44 @@ set -u
 N=${1:-30}
 CASE=${2:-qwen3_dynamic_tensormap.h}
 TIER=${3:-2}
+ROUND_SIZE=${4:-10}
+
+# "field|grep -oP pattern" -- field names become the DATA[] keys below.
+FIELD_SPECS=(
+    'init_time|\[init\] elapsed_time = \K[0-9]+'
+    'orch_time|\[orchestration\] elapsed_time = \K[0-9]+'
+    'orch_tp|\[orchestration\] task_tp = \K[0-9.]+'
+    'sched_dur|\[scheduler\] duration = \K[0-9]+'
+    'sched_tp|\[scheduler\] task_tp = \K[0-9.]+'
+    'sched_idle|\[scheduler\] idle_ns = \K[0-9]+'
+    'sched_active|\[scheduler\] active_ns = \K[0-9]+'
+    'sched_drain|\[scheduler\] drain_ns = \K[0-9]+'
+    'sched_idle_iters|\[scheduler\] idle_loop_iters = \K[0-9]+'
+    'sched_idle_busy|\[scheduler\] idle_busy_iters = \K[0-9]+'
+    'sched_active_iters|\[scheduler\] active_loop_iters = \K[0-9]+'
+    'sched_active_busy|\[scheduler\] active_busy_iters = \K[0-9]+'
+    'sched_drain_iters|\[scheduler\] drain_loop_iters = \K[0-9]+'
+    'sched_drain_busy|\[scheduler\] drain_busy_iters = \K[0-9]+'
+    'cutter_dur|\[cutter\] duration = \K[0-9]+'
+    'cutter_tp|\[cutter\] task_tp = \K[0-9.]+'
+    'cutter_idle|\[cutter\] idle_ns = \K[0-9]+'
+    'cutter_active|\[cutter\] active_ns = \K[0-9]+'
+    'cutter_drain|\[cutter\] drain_ns = \K[0-9]+'
+    'cutter_idle_iters|\[cutter\] idle_loop_iters = \K[0-9]+'
+    'cutter_idle_busy|\[cutter\] idle_busy_iters = \K[0-9]+'
+    'cutter_active_iters|\[cutter\] active_loop_iters = \K[0-9]+'
+    'cutter_active_busy|\[cutter\] active_busy_iters = \K[0-9]+'
+    'cutter_drain_iters|\[cutter\] drain_loop_iters = \K[0-9]+'
+    'cutter_drain_busy|\[cutter\] drain_busy_iters = \K[0-9]+'
+    'as_ns|\[cutter\] add_successors_ns = \K[0-9]+'
+    'as_share|\[cutter\] add_successors_share = \K[0-9.]+'
+    'as_calls|\[cutter\] add_successors_calls = \K[0-9]+'
+    'as_nonzero|\[cutter\] add_successors_nonzero_calls = \K[0-9]+'
+    'total_time|\[total\] elapsed_time = \K[0-9]+'
+    'total_tp|\[total\] task_tp = \K[0-9.]+'
+)
+
+declare -A DATA
 
 stats() {
     local name=$1
@@ -37,7 +85,7 @@ stats() {
     echo "$name: $result"
 }
 
-measure() {
+build() {
     local label=$1
     local extra_cflags=$2
 
@@ -55,49 +103,47 @@ measure() {
         echo "ERROR: build failed for $label, bin/esl_proxy not found" >&2
         exit 1
     fi
+}
 
-    local init_time=() orch_time=() orch_tp=() sched_dur=() sched_tp=()
-    local sched_idle=() sched_active=() sched_drain=()
-    local cutter_dur=() cutter_tp=() cutter_idle=() cutter_active=() cutter_drain=()
-    local total_time=() total_tp=()
+run_round() {
+    local label=$1
+    local extra_cflags=$2
+    local count=$3
 
-    for i in $(seq 1 "$N"); do
+    build "$label" "$extra_cflags"
+
+    for ((i = 0; i < count; i++)); do
         out=$(WORKER_LOG= ./bin/esl_proxy 2>&1)
-        init_time+=("$(echo "$out" | grep -oP '\[init\] elapsed_time = \K[0-9]+')")
-        orch_time+=("$(echo "$out" | grep -oP '\[orchestration\] elapsed_time = \K[0-9]+')")
-        orch_tp+=("$(echo "$out" | grep -oP '\[orchestration\] task_tp = \K[0-9.]+')")
-        sched_dur+=("$(echo "$out" | grep -oP '\[scheduler\] duration = \K[0-9]+')")
-        sched_tp+=("$(echo "$out" | grep -oP '\[scheduler\] task_tp = \K[0-9.]+')")
-        sched_idle+=("$(echo "$out" | grep -oP '\[scheduler\] idle_ns = \K[0-9]+')")
-        sched_active+=("$(echo "$out" | grep -oP '\[scheduler\] active_ns = \K[0-9]+')")
-        sched_drain+=("$(echo "$out" | grep -oP '\[scheduler\] drain_ns = \K[0-9]+')")
-        cutter_dur+=("$(echo "$out" | grep -oP '\[cutter\] duration = \K[0-9]+')")
-        cutter_tp+=("$(echo "$out" | grep -oP '\[cutter\] task_tp = \K[0-9.]+')")
-        cutter_idle+=("$(echo "$out" | grep -oP '\[cutter\] idle_ns = \K[0-9]+')")
-        cutter_active+=("$(echo "$out" | grep -oP '\[cutter\] active_ns = \K[0-9]+')")
-        cutter_drain+=("$(echo "$out" | grep -oP '\[cutter\] drain_ns = \K[0-9]+')")
-        total_time+=("$(echo "$out" | grep -oP '\[total\] elapsed_time = \K[0-9]+')")
-        total_tp+=("$(echo "$out" | grep -oP '\[total\] task_tp = \K[0-9.]+')")
+        for spec in "${FIELD_SPECS[@]}"; do
+            local field=${spec%%|*}
+            local pattern=${spec#*|}
+            local value
+            value=$(echo "$out" | grep -oP "$pattern")
+            DATA["${label}_${field}"]+="$value "
+        done
     done
+}
 
-    echo "=== $label ($N runs, CASE=$CASE, SPMD_TIER=$TIER) ==="
-    stats "init elapsed_time (ns)" "${init_time[@]}"
-    stats "orchestration elapsed_time (ns)" "${orch_time[@]}"
-    stats "orchestration task_tp (MTasks/s)" "${orch_tp[@]}"
-    stats "scheduler duration (ns)" "${sched_dur[@]}"
-    stats "scheduler task_tp (MTasks/s)" "${sched_tp[@]}"
-    stats "scheduler idle_ns (ns)" "${sched_idle[@]}"
-    stats "scheduler active_ns (ns)" "${sched_active[@]}"
-    stats "scheduler drain_ns (ns)" "${sched_drain[@]}"
-    stats "cutter duration (ns)" "${cutter_dur[@]}"
-    stats "cutter task_tp (MTasks/s)" "${cutter_tp[@]}"
-    stats "cutter idle_ns (ns)" "${cutter_idle[@]}"
-    stats "cutter active_ns (ns)" "${cutter_active[@]}"
-    stats "cutter drain_ns (ns)" "${cutter_drain[@]}"
-    stats "total elapsed_time (ns)" "${total_time[@]}"
-    stats "total task_tp (MTasks/s)" "${total_tp[@]}"
+remaining=$N
+while [ "$remaining" -gt 0 ]; do
+    this_round=$ROUND_SIZE
+    if [ "$remaining" -lt "$ROUND_SIZE" ]; then
+        this_round=$remaining
+    fi
+    run_round "baseline" "" "$this_round"
+    run_round "dedup" "-DENABLE_DAG_DEDUP" "$this_round"
+    remaining=$((remaining - this_round))
+done
+
+report() {
+    local label=$1
+    echo "=== $label ($N runs, CASE=$CASE, SPMD_TIER=$TIER, ROUND_SIZE=$ROUND_SIZE) ==="
+    for spec in "${FIELD_SPECS[@]}"; do
+        local field=${spec%%|*}
+        stats "$field" ${DATA["${label}_${field}"]}
+    done
     echo ""
 }
 
-measure "baseline (no dedup)" ""
-measure "dedup enabled" "-DENABLE_DAG_DEDUP"
+report "baseline"
+report "dedup"
