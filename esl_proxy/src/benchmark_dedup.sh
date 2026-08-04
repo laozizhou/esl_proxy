@@ -43,10 +43,13 @@ measure() {
 
     echo "Building ($label)..." >&2
     make clean >/dev/null 2>&1
+    # Override LDFLAGS to drop the Makefile's default -static: this server has
+    # no glibc-static/libatomic-static installed, and static linking isn't
+    # needed here since we build and run on this same machine.
     if [ -n "$extra_cflags" ]; then
-        make CASE="$CASE" QWEN3_SPMD_TIER="$TIER" EXTRA_CFLAGS="$extra_cflags" >/dev/null 2>&1
+        make CASE="$CASE" QWEN3_SPMD_TIER="$TIER" EXTRA_CFLAGS="$extra_cflags" LDFLAGS="-lpthread -latomic" >/dev/null 2>&1
     else
-        make CASE="$CASE" QWEN3_SPMD_TIER="$TIER" >/dev/null 2>&1
+        make CASE="$CASE" QWEN3_SPMD_TIER="$TIER" LDFLAGS="-lpthread -latomic" >/dev/null 2>&1
     fi
     if [ ! -x bin/esl_proxy ]; then
         echo "ERROR: build failed for $label, bin/esl_proxy not found" >&2
