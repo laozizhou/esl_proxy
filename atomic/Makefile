@@ -1,7 +1,7 @@
 # Makefile for atomic_fetch_add
 CC       = cc
 CFLAGS   = -std=c11 -O2 -Wall -Wextra
-LDFLAGS  = -static -lpthread
+LDFLAGS  = -lpthread
 
 TARGET   = atomic_fetch_add
 SRC      = atomic_fetch_add.c
