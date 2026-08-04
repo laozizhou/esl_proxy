@@ -154,9 +154,27 @@ void *cutter_worker(void *arg)
 {
     int tid = (int)(intptr_t)arg;
     uint64_t start_ns = get_time_ns();
+    uint64_t first_task_ns = 0;
+    uint64_t orch_done_ns = 0;
     init_state_buf();
     while (!atomic_load(&g_is_done)) {
+        /* Peek at g_orch_is_done purely to split timing into phases below --
+         * cutter's own loop must keep waiting on g_is_done (dispatch's finish
+         * signal), which is a different, later event than orchestrator
+         * finishing (see the [scheduler]/[cutter] split discussion). */
+        if (first_task_ns == 0 && atomic_load(&g_task_id) > 0) {
+            first_task_ns = get_time_ns();
+        }
+        if (orch_done_ns == 0 && atomic_load(&g_orch_is_done)) {
+            orch_done_ns = get_time_ns();
+        }
         deal_completed_queue();
+    }
+    if (orch_done_ns == 0) {
+        orch_done_ns = get_time_ns();
+    }
+    if (first_task_ns == 0) {
+        first_task_ns = orch_done_ns;
     }
 
     while(g_commit_task_id < atomic_load(&g_task_id)){
@@ -169,5 +187,8 @@ void *cutter_worker(void *arg)
     MAIN_LOGF("[cutter] task_cnt = %u", g_completed_task_cnt);
     MAIN_LOGF("[cutter] duration = %llu ns", (unsigned long long)elapsed_ns);
     MAIN_LOGF("[cutter] task_tp = %f MTasks/s", (float)(g_completed_task_cnt * 1000.0 / elapsed_ns));
+    MAIN_LOGF("[cutter] idle_ns = %llu ns", (unsigned long long)(first_task_ns - start_ns));
+    MAIN_LOGF("[cutter] active_ns = %llu ns", (unsigned long long)(orch_done_ns - first_task_ns));
+    MAIN_LOGF("[cutter] drain_ns = %llu ns", (unsigned long long)(end_ns - orch_done_ns));
     return NULL;
 }

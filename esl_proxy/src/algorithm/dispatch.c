@@ -172,15 +172,23 @@ void *dispatch_worker(void *arg)
 
     int total_sent = 0;
     uint64_t start_ns = get_time_ns();
-    
+    uint64_t first_task_ns = 0;
+
     while (!atomic_load(&g_orch_is_done)) {
+        if (first_task_ns == 0 && atomic_load(&g_task_id) > 0) {
+            first_task_ns = get_time_ns();
+        }
         total_sent += dispatch(tid);
     }
-    
+    uint64_t orch_done_ns = get_time_ns();
+    if (first_task_ns == 0) {
+        first_task_ns = orch_done_ns;
+    }
+
     while (atomic_load(&g_completed_cnt) < atomic_load(&g_task_id)) {
         total_sent += dispatch(tid);
     }
-    
+
     atomic_store(&g_is_done, true);
     uint64_t end_ns = get_time_ns();
     uint64_t elapsed_ns = end_ns - start_ns;
@@ -188,5 +196,8 @@ void *dispatch_worker(void *arg)
     MAIN_LOGF("[scheduler] task_cnt = %u", g_completed_cnt);
     MAIN_LOGF("[scheduler] duration = %llu ns", (unsigned long long)elapsed_ns);
     MAIN_LOGF("[scheduler] task_tp = %f MTasks/s",(float)(g_completed_cnt * 1000.0 / elapsed_ns));
+    MAIN_LOGF("[scheduler] idle_ns = %llu ns", (unsigned long long)(first_task_ns - start_ns));
+    MAIN_LOGF("[scheduler] active_ns = %llu ns", (unsigned long long)(orch_done_ns - first_task_ns));
+    MAIN_LOGF("[scheduler] drain_ns = %llu ns", (unsigned long long)(end_ns - orch_done_ns));
     return NULL;
 }
