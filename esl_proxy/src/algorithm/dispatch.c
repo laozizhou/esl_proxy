@@ -173,12 +173,29 @@ void *dispatch_worker(void *arg)
     int total_sent = 0;
     uint64_t start_ns = get_time_ns();
     uint64_t first_task_ns = 0;
+    uint64_t idle_loop_iters = 0;
+    uint64_t idle_busy_iters = 0;
+    uint64_t active_loop_iters = 0;
+    uint64_t active_busy_iters = 0;
+    uint64_t drain_loop_iters = 0;
+    uint64_t drain_busy_iters = 0;
 
     while (!atomic_load(&g_orch_is_done)) {
-        if (first_task_ns == 0 && atomic_load(&g_task_id) > 0) {
+        bool was_idle = (first_task_ns == 0);
+        if (was_idle && atomic_load(&g_task_id) > 0) {
             first_task_ns = get_time_ns();
         }
-        total_sent += dispatch(tid);
+        int completed_before = atomic_load(&g_completed_cnt);
+        int sent = dispatch(tid);
+        total_sent += sent;
+        bool busy = (sent > 0 || atomic_load(&g_completed_cnt) != completed_before);
+        if (was_idle) {
+            idle_loop_iters++;
+            if (busy) idle_busy_iters++;
+        } else {
+            active_loop_iters++;
+            if (busy) active_busy_iters++;
+        }
     }
     uint64_t orch_done_ns = get_time_ns();
     if (first_task_ns == 0) {
@@ -186,7 +203,13 @@ void *dispatch_worker(void *arg)
     }
 
     while (atomic_load(&g_completed_cnt) < atomic_load(&g_task_id)) {
-        total_sent += dispatch(tid);
+        int completed_before = atomic_load(&g_completed_cnt);
+        int sent = dispatch(tid);
+        total_sent += sent;
+        drain_loop_iters++;
+        if (sent > 0 || atomic_load(&g_completed_cnt) != completed_before) {
+            drain_busy_iters++;
+        }
     }
 
     atomic_store(&g_is_done, true);
@@ -199,5 +222,11 @@ void *dispatch_worker(void *arg)
     MAIN_LOGF("[scheduler] idle_ns = %llu ns", (unsigned long long)(first_task_ns - start_ns));
     MAIN_LOGF("[scheduler] active_ns = %llu ns", (unsigned long long)(orch_done_ns - first_task_ns));
     MAIN_LOGF("[scheduler] drain_ns = %llu ns", (unsigned long long)(end_ns - orch_done_ns));
+    MAIN_LOGF("[scheduler] idle_loop_iters = %llu", (unsigned long long)idle_loop_iters);
+    MAIN_LOGF("[scheduler] idle_busy_iters = %llu", (unsigned long long)idle_busy_iters);
+    MAIN_LOGF("[scheduler] active_loop_iters = %llu", (unsigned long long)active_loop_iters);
+    MAIN_LOGF("[scheduler] active_busy_iters = %llu", (unsigned long long)active_busy_iters);
+    MAIN_LOGF("[scheduler] drain_loop_iters = %llu", (unsigned long long)drain_loop_iters);
+    MAIN_LOGF("[scheduler] drain_busy_iters = %llu", (unsigned long long)drain_busy_iters);
     return NULL;
 }

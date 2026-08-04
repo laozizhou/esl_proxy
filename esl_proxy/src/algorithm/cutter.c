@@ -156,19 +156,44 @@ void *cutter_worker(void *arg)
     uint64_t start_ns = get_time_ns();
     uint64_t first_task_ns = 0;
     uint64_t orch_done_ns = 0;
+    uint64_t idle_loop_iters = 0;
+    uint64_t idle_busy_iters = 0;
+    uint64_t active_loop_iters = 0;
+    uint64_t active_busy_iters = 0;
+    uint64_t drain_loop_iters = 0;
+    uint64_t drain_busy_iters = 0;
     init_state_buf();
     while (!atomic_load(&g_is_done)) {
-        /* Peek at g_orch_is_done purely to split timing into phases below --
-         * cutter's own loop must keep waiting on g_is_done (dispatch's finish
-         * signal), which is a different, later event than orchestrator
-         * finishing (see the [scheduler]/[cutter] split discussion). */
-        if (first_task_ns == 0 && atomic_load(&g_task_id) > 0) {
+        /* This loop's own exit condition is g_is_done (dispatch's finish
+         * signal, set only after dispatch's own drain loop completes), which
+         * is later than g_orch_is_done -- so it spans all three timing
+         * phases (idle/active/drain), not just active. Bucket each iteration
+         * by which phase was still in progress at the START of the
+         * iteration, matching the idle_ns/active_ns/drain_ns boundaries
+         * below; the "drain" bucket here is combined with the second loop's
+         * counters since both fall in the same drain_ns window. */
+        bool before_first_task = (first_task_ns == 0);
+        if (before_first_task && atomic_load(&g_task_id) > 0) {
             first_task_ns = get_time_ns();
         }
-        if (orch_done_ns == 0 && atomic_load(&g_orch_is_done)) {
+        bool before_orch_done = (orch_done_ns == 0);
+        if (before_orch_done && atomic_load(&g_orch_is_done)) {
             orch_done_ns = get_time_ns();
         }
+        uint32_t commit_before = g_commit_task_id;
+        uint32_t completed_before = g_completed_task_cnt;
         deal_completed_queue();
+        bool busy = (g_commit_task_id != commit_before || g_completed_task_cnt != completed_before);
+        if (before_first_task) {
+            idle_loop_iters++;
+            if (busy) idle_busy_iters++;
+        } else if (before_orch_done) {
+            active_loop_iters++;
+            if (busy) active_busy_iters++;
+        } else {
+            drain_loop_iters++;
+            if (busy) drain_busy_iters++;
+        }
     }
     if (orch_done_ns == 0) {
         orch_done_ns = get_time_ns();
@@ -178,7 +203,13 @@ void *cutter_worker(void *arg)
     }
 
     while(g_commit_task_id < atomic_load(&g_task_id)){
+        uint32_t commit_before = g_commit_task_id;
+        uint32_t completed_before = g_completed_task_cnt;
         deal_completed_queue();
+        drain_loop_iters++;
+        if (g_commit_task_id != commit_before || g_completed_task_cnt != completed_before) {
+            drain_busy_iters++;
+        }
     }
     uint64_t end_ns = get_time_ns();
     uint64_t elapsed_ns = end_ns - start_ns;
@@ -190,5 +221,11 @@ void *cutter_worker(void *arg)
     MAIN_LOGF("[cutter] idle_ns = %llu ns", (unsigned long long)(first_task_ns - start_ns));
     MAIN_LOGF("[cutter] active_ns = %llu ns", (unsigned long long)(orch_done_ns - first_task_ns));
     MAIN_LOGF("[cutter] drain_ns = %llu ns", (unsigned long long)(end_ns - orch_done_ns));
+    MAIN_LOGF("[cutter] idle_loop_iters = %llu", (unsigned long long)idle_loop_iters);
+    MAIN_LOGF("[cutter] idle_busy_iters = %llu", (unsigned long long)idle_busy_iters);
+    MAIN_LOGF("[cutter] active_loop_iters = %llu", (unsigned long long)active_loop_iters);
+    MAIN_LOGF("[cutter] active_busy_iters = %llu", (unsigned long long)active_busy_iters);
+    MAIN_LOGF("[cutter] drain_loop_iters = %llu", (unsigned long long)drain_loop_iters);
+    MAIN_LOGF("[cutter] drain_busy_iters = %llu", (unsigned long long)drain_busy_iters);
     return NULL;
 }
