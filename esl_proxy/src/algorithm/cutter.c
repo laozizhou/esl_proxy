@@ -25,6 +25,8 @@ uint32_t  g_predecessor_cnt[RING_SIZE];
 uint32_t g_commit_task_id = 0;
 uint32_t g_completed_task_cnt = 0;
 uint64_t g_add_successors_ns = 0;
+uint64_t g_add_successors_calls = 0;
+uint64_t g_add_successors_nonzero_calls = 0;
 
 static inline bool update_task_state(uint32_t cnt, uint32_t* cq_buf)
 {
@@ -145,9 +147,14 @@ void deal_completed_queue() {
         //     WORKER_LOGF("cutter, completed_task_id,%d ", cq_buf[i]);
         // }
         update_task_state(cnt, cq_buf);
+        uint32_t commit_before_as = g_commit_task_id;
         uint64_t as_start_ns = get_time_ns();
         add_successors(ready_cnt, rq_buf);
         g_add_successors_ns += get_time_ns() - as_start_ns;
+        g_add_successors_calls++;
+        if (g_commit_task_id != commit_before_as) {
+            g_add_successors_nonzero_calls++;
+        }
         resolve_dep(cnt, cq_buf, rq_buf, ready_cnt);
         send_2_ready_queue(ready_cnt, rq_buf);
     }
@@ -232,5 +239,7 @@ void *cutter_worker(void *arg)
     MAIN_LOGF("[cutter] drain_busy_iters = %llu", (unsigned long long)drain_busy_iters);
     MAIN_LOGF("[cutter] add_successors_ns = %llu ns", (unsigned long long)g_add_successors_ns);
     MAIN_LOGF("[cutter] add_successors_share = %f", (float)(g_add_successors_ns / (double)elapsed_ns));
+    MAIN_LOGF("[cutter] add_successors_calls = %llu", (unsigned long long)g_add_successors_calls);
+    MAIN_LOGF("[cutter] add_successors_nonzero_calls = %llu", (unsigned long long)g_add_successors_nonzero_calls);
     return NULL;
 }
