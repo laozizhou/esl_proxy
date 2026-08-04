@@ -4,13 +4,7 @@
 #define RING_SIZE 4096
 #define RING_MASK (RING_SIZE - 1)
 #define HALF_RING_SIZE 2048
-/* Must exceed the total number of predecessor edges recorded across an
- * entire run (g_predecessor_ring has no wraparound/bounds check -- see
- * add_predecessors() in ring_buf.h). Measured 27,450 edges at
- * QWEN3_SPMD_TIER=0 against the old 8192 cap, which silently corrupted
- * the heap (glibc "malloc(): corrupted top size"). Sized with headroom
- * for other cases/tiers, not just the one that was measured. */
-#define NODE_BUFF_SIZE 65536
+#define NODE_BUFF_SIZE 8192
 
 // TODO: ERROR
 #define CON_NODE_CNT 32

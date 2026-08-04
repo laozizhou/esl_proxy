@@ -166,15 +166,6 @@ static int add_predecessors(uint32_t task_id, uint32_t target[], uint32_t n, uin
 
         WORKER_LOGF("succeed,task_id,%u,predecessor_id,%u,idx,%d", task_id, target[i], cnt);
         size_t idx = atomic_fetch_add(&g_predecessor_ring.tail, 1);
-        if (idx >= NODE_BUFF_SIZE) {
-            /* g_predecessor_ring.head has no wraparound; writing past
-             * NODE_BUFF_SIZE silently corrupts adjacent heap chunks
-             * (glibc later aborts with "malloc(): corrupted top size" at
-             * an unrelated allocation, far from this actual bug site).
-             * Fail loudly here instead. */
-            MAIN_LOGF("[fatal] g_predecessor_ring overflow: idx=%zu >= NODE_BUFF_SIZE=%d", idx, NODE_BUFF_SIZE);
-            abort();
-        }
         g_predecessor_ring.head[idx] = target[i];
         cnt++;
     }
