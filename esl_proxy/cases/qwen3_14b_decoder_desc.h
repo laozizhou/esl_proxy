@@ -99,28 +99,27 @@ int orchestrator_desc(const uint64_t orch_args, int thread_id, int *created_cnt)
     int desc_start = thread_id * desc_batch_size;
     int desc_end = (thread_id  + 1 ) * desc_batch_size;
     int tensor_index = 0;
-    Tensor ext_hidden_states = tensor_from_base_layout(orch_args + 0, (uint32_t[]){90, 5120}, 2, BFLOAT16); // batch=90, hidden=5120
-    Tensor ext_input_rms_weight = tensor_from_base_layout(orch_args + 1, (uint32_t[]){1, 5120}, 2, FLOAT32); // hidden=5120
-    Tensor ext_wq = tensor_from_base_layout(orch_args + 2, (uint32_t[]){5120, 5120}, 2, BFLOAT16); // hidden=5120
-    Tensor ext_wk = tensor_from_base_layout(orch_args + 3, (uint32_t[]){5120, 1024}, 2, BFLOAT16); // hidden=5120, kv_hidden=1024
-    Tensor ext_wv = tensor_from_base_layout(orch_args + 4, (uint32_t[]){5120, 1024}, 2, BFLOAT16); // hidden=5120, kv_hidden=1024
-    Tensor ext_q_norm_weight = tensor_from_base_layout(orch_args + 5, (uint32_t[]){1, 128}, 2, FLOAT32); // head_dim=128
-    Tensor ext_k_norm_weight = tensor_from_base_layout(orch_args + 6, (uint32_t[]){1, 128}, 2, FLOAT32); // head_dim=128
-    Tensor ext_seq_lens = tensor_from_base_layout(orch_args + 7, (uint32_t[]){90}, 1, INT32); // batch=90
-    Tensor ext_block_table = tensor_from_base_layout(orch_args + 8, (uint32_t[]){2880}, 1, INT32); // num_blocks=2880
-    Tensor ext_slot_mapping = tensor_from_base_layout(orch_args + 9, (uint32_t[]){90}, 1, INT32); // batch=90
-    Tensor ext_rope_cos = tensor_from_base_layout(orch_args + 10, (uint32_t[]){4096, 128}, 2, FLOAT32); // max_seq=4096, head_dim=128
-    Tensor ext_rope_sin = tensor_from_base_layout(orch_args + 11, (uint32_t[]){4096, 128}, 2, FLOAT32); // max_seq=4096, head_dim=128
-    Tensor ext_k_cache = tensor_from_base_layout(orch_args + 12, (uint32_t[]){2949120, 128}, 2, BFLOAT16); // cache_rows=2880*8*128, head_dim=128
-    Tensor ext_v_cache = tensor_from_base_layout(orch_args + 13, (uint32_t[]){2949120, 128}, 2, BFLOAT16); // cache_rows=2880*8*128, head_dim=128
-    Tensor ext_wo = tensor_from_base_layout(orch_args + 14, (uint32_t[]){5120, 5120}, 2, BFLOAT16); // hidden=5120
-    Tensor ext_post_rms_weight = tensor_from_base_layout(orch_args + 15, (uint32_t[]){1, 5120}, 2, FLOAT32); // hidden=5120
-    Tensor ext_w_gate = tensor_from_base_layout(orch_args + 16, (uint32_t[]){5120, 17408}, 2, BFLOAT16); // hidden=5120, intermediate=17408
-    Tensor ext_w_up = tensor_from_base_layout(orch_args + 17, (uint32_t[]){5120, 17408}, 2, BFLOAT16); // hidden=5120, intermediate=17408
-    Tensor ext_w_down = tensor_from_base_layout(orch_args + 18, (uint32_t[]){17408, 5120}, 2, BFLOAT16); // intermediate=17408, hidden=5120
-    Tensor ext_out = tensor_from_base_layout(orch_args + 19, (uint32_t[]){90, 5120}, 2, BFLOAT16); // batch=90, hidden=5120
-    (void)ext_seq_lens;
-    (void)ext_slot_mapping;
+    extern Tensor ext_hidden_states; /* batch=90, hidden=5120 */
+    extern Tensor ext_input_rms_weight; /* hidden=5120 */
+    extern Tensor ext_wq; /* hidden=5120 */
+    extern Tensor ext_wk; /* hidden=5120, kv_hidden=1024 */
+    extern Tensor ext_wv; /* hidden=5120, kv_hidden=1024 */
+    extern Tensor ext_q_norm_weight; /* head_dim=128 */
+    extern Tensor ext_k_norm_weight; /* head_dim=128 */
+    extern Tensor ext_seq_lens; /* batch=90 */
+    extern Tensor ext_block_table; /* num_blocks=2880 */
+    extern Tensor ext_slot_mapping; /* batch=90 */
+    extern Tensor ext_rope_cos; /* max_seq=4096, head_dim=128 */
+    extern Tensor ext_rope_sin; /* max_seq=4096, head_dim=128 */
+    extern Tensor ext_k_cache; /* cache_rows=2880*8*128, head_dim=128 */
+    extern Tensor ext_v_cache; /* cache_rows=2880*8*128, head_dim=128 */
+    extern Tensor ext_wo; /* hidden=5120 */
+    extern Tensor ext_post_rms_weight; /* hidden=5120 */
+    extern Tensor ext_w_gate; /* hidden=5120, intermediate=17408 */
+    extern Tensor ext_w_up; /* hidden=5120, intermediate=17408 */
+    extern Tensor ext_w_down; /* intermediate=17408, hidden=5120 */
+    extern Tensor ext_out; /* batch=90, hidden=5120 */
+
     const int64_t user_batch = 90; // batch=90
     const int64_t batch_padded = 96; // ((batch+15)/16)*16
     Tensor q_proj = get_tensor(tensor_index++);

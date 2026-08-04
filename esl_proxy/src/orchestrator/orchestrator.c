@@ -46,7 +46,7 @@ int main(int argc, char *argv[])
 {
     if (argc >= 2) {
         desc_thread_count = atoi(argv[1]);
-        desc_batch_size = (240 / desc_thread_count & 127 + 1) * 128;
+        // desc_batch_size = (240 / desc_thread_count & 127 + 1) * 128;
         if (desc_thread_count <= 0) {
             fprintf(stderr, "Usage: %s [desc_desc_thread_count]  (default %d)\n",
                     argv[0], DESC_THREAD_COUNT);
@@ -93,12 +93,14 @@ int main(int argc, char *argv[])
     for (int i = 0; i < desc_thread_count; i++) {
         /* throughput = tasks / us   (because MTasks/s = tasks / (us * 1e-6) * 1e-6 = tasks / us) */
         double throughput = (double)desc_args[i].task_count / (double)desc_args[i].elapsed_ns * (double)1000.0;
-        printf("  thread %2d: tasks=%d  created=%d  time=%llu ns  throughput=%.2f MTasks/s\n",
+        double time_240_us = 240.0 / throughput;
+        printf("  thread %2d: tasks=%d  created=%d  time=%llu ns  throughput=%.2f MTasks/s  time_240=%.2f us\n",
                desc_args[i].thread_id,
                desc_args[i].task_count,
                desc_args[i].created_cnt,
                (unsigned long long)desc_args[i].elapsed_ns,
-               throughput);
+               throughput,
+               time_240_us);
         total_cnt += desc_args[i].created_cnt;
     }
     printf("orchestrator total elapsed time (1 alloc + %d desc threads): %llu ns\n",

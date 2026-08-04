@@ -13,7 +13,14 @@
 #include "scheduler/conf.h"
 #include "scheduler/painter.h"
 #include "scheduler/dispatch.h"
-#include "common/log.h"
+// #include "common/log.h"
+
+static inline uint64_t get_time_ns(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000000000ULL + ts.tv_nsec;
+}
 
 /* Global variable definitions needed by dispatch.c and painter.c */
 atomic_bool g_is_done = false;
@@ -36,18 +43,18 @@ int main(void) {
     pthread_t dispatch_threads[DISPATCH_THREAD_CNT];
     pthread_t painter_threads[PAINTER_THREAD_CNT];
 
-    log_init("scheduler");
+    // log_init("scheduler");
 
-    /* SCHEDULER_LOG env var controls worker logging at runtime:
-     *   unset or "1" -> enabled (default)
-     *   "0" or "off" -> disabled for performance testing */
-    char *log_env = getenv("SCHEDULER_LOG");
-    g_worker_log = (!log_env || (strcmp(log_env, "0") != 0 && strcmp(log_env, "off") != 0)) ? 1 : 0;
+    // /* SCHEDULER_LOG env var controls worker logging at runtime:
+    //  *   unset or "1" -> enabled (default)
+    //  *   "0" or "off" -> disabled for performance testing */
+    // char *log_env = getenv("SCHEDULER_LOG");
+    // g_worker_log = (!log_env || (strcmp(log_env, "0") != 0 && strcmp(log_env, "off") != 0)) ? 1 : 0;
 
     buf_init();
     init_state_buf();
     init_ctrl_t();
-    WORKER_LOGF("painter_cnt,%d,dispatcher_cnt,%d", PAINTER_THREAD_CNT, DISPATCH_THREAD_CNT);
+    // WORKER_LOGF("painter_cnt,%d,dispatcher_cnt,%d", PAINTER_THREAD_CNT, DISPATCH_THREAD_CNT);
     /* Register signal handlers for graceful shutdown on Ctrl+C */
     signal(SIGINT, handle_signal);
     signal(SIGTERM, handle_signal);
@@ -82,7 +89,9 @@ int main(void) {
     }
     uint64_t end_ns = get_time_ns();
     uint64_t duration = end_ns - start_ns;
-    WORKER_LOGF("scheduler_duration,%lld/ns", duration);
-    log_close();
+    // WORKER_LOGF("scheduler_duration,%lld/ns", duration);
+    printf("scheduler_throughput,%.2f,MTasks/s",
+                (float)(total_task_cnt * 1000.0 / duration));
+    // log_close();
     return 0;
 }
