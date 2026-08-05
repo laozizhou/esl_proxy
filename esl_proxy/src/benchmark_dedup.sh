@@ -80,7 +80,9 @@ stats() {
             mean = sum / n
             if (n % 2 == 1) median = a[(n + 1) / 2]
             else median = (a[n / 2] + a[n / 2 + 1]) / 2
-            printf "median=%.1f mean=%.1f min=%.1f max=%.1f", median, mean, a[1], a[n]
+            p90_idx = int(0.90 * n + 0.5); if (p90_idx < 1) p90_idx = 1; if (p90_idx > n) p90_idx = n
+            p99_idx = int(0.99 * n + 0.5); if (p99_idx < 1) p99_idx = 1; if (p99_idx > n) p99_idx = n
+            printf "median=%.1f mean=%.1f min=%.1f max=%.1f p90=%.1f p99=%.1f", median, mean, a[1], a[n], a[p90_idx], a[p99_idx]
         }')
     echo "$name: $result"
 }
