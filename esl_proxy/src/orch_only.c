@@ -1,0 +1,100 @@
+/*
+ * orch_only.c - Orchestrator-only entry point (no cutter/dispatch threads)
+ *
+ * Same init sequence as main.c, but skips creating the cutter/dispatch
+ * threads entirely, so [orchestration] elapsed_time reflects orchestrator
+ * running completely alone -- no thread contention, no active/drain
+ * interaction to untangle. Mirrors main.c's structure deliberately so this
+ * stays a minimal diff, not a rewrite.
+ */
+#define _POSIX_C_SOURCE 199309L
+
+#include <pthread.h>
+#include <stdint.h>
+#include <stdlib.h>
+
+#if ORCHESTRATION_TIME
+#include <time.h>
+#endif
+
+#include "conf.h"
+#include "cutter.h"
+#include "dispatch.h"
+#include "log.h"
+#include "manager.h"
+#include "mem_pool.h"
+
+#ifndef ORCH_CASE
+#define ORCH_CASE qwen3_dynamic_tensormap.h
+#endif
+
+#define INCLUDE(x) #x
+#define INCLUDE_FILE(x) INCLUDE(x)
+#include INCLUDE_FILE(ORCH_CASE)
+
+void aicpu_orchestration_entry(const uint64_t orch_args);
+
+#define MEM_POOL_BYTES (1024UL * 1024UL * 1024UL)
+#define WHEN2FREE_CAP 4096
+
+static uint8_t g_mem_pool_storage[MEM_POOL_BYTES];
+static when2free_entry_t g_when2free_entries[WHEN2FREE_CAP];
+
+extern atomic_bool g_orch_is_done;
+
+int main(void) {
+#if ORCHESTRATION_TIME
+    uint64_t total_start_ns = get_time_ns();
+#endif
+
+#if WORKER_LOG
+    const char *log_env = getenv("WORKER_LOG");
+    if (log_env != NULL && log_env[0] == '1') {
+        g_worker_log = 1;
+        log_init("pto.");
+    }
+#endif
+
+#if ORCHESTRATION_TIME
+    uint64_t init_start_ns = get_time_ns();
+#endif
+    mem_pool_init(&g_mem_pool, g_mem_pool_storage, sizeof g_mem_pool_storage);
+    mem_pool_init_fifo(&g_mem_pool, g_when2free_entries, WHEN2FREE_CAP);
+    ring_buf_init();
+    init_predecessors();
+#if ORCHESTRATION_TIME
+    uint64_t init_end_ns = get_time_ns();
+    MAIN_LOGF("[init] elapsed_time = %llu ns", (unsigned long long)(init_end_ns - init_start_ns));
+#endif
+
+    /* Deliberately no cutter/dispatch threads created here. */
+
+#if ORCHESTRATION_TIME
+    uint64_t start_ns = get_time_ns();
+    aicpu_orchestration_entry(0);
+    uint64_t end_ns = get_time_ns();
+    uint64_t elapsed_ns = end_ns - start_ns;
+
+    MAIN_LOGF("[orchestration] task_cnt = %u", g_task_id);
+    MAIN_LOGF("[orchestration] subtask_cnt = %llu", (unsigned long long)g_subtask_cnt);
+    MAIN_LOGF("[orchestration] elapsed_time = %llu ns", (unsigned long long)elapsed_ns);
+    MAIN_LOGF("[orchestration] task_tp = %f MTasks/s", (float)(g_task_id * 1000.0 / elapsed_ns));
+    MAIN_LOGF("[orchestration] subtask_tp = %f MTasks/s", (float)(g_subtask_cnt * 1000.0 / elapsed_ns));
+#else
+    aicpu_orchestration_entry(0);
+#endif
+    atomic_store(&g_orch_is_done, true);
+
+#if ORCHESTRATION_TIME
+    uint64_t total_end_ns = get_time_ns();
+    uint64_t total_elapsed_ns = total_end_ns - total_start_ns;
+    MAIN_LOGF("[total] elapsed_time = %llu ns", (unsigned long long)total_elapsed_ns);
+    MAIN_LOGF("[total] task_tp = %f MTasks/s", (float)(g_task_id * 1000.0 / total_elapsed_ns));
+#endif
+
+#if WORKER_LOG
+    log_close();
+#endif
+
+    return 0;
+}
