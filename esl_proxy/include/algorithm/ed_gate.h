@@ -75,6 +75,61 @@ static inline bool ed_poll_doorbell(int type, int core, int slot)
     return true;
 }
 
+/*
+ * 每轮扫描前排空 GATED 槽位。executor 主扫描循环因此完全不含 ED 代码，
+ * 常见情况（全场没有 staged 槽位）的代价是每轮 EXE_TYPE_CNT 次 relaxed 读。
+ *
+ * local_pending 由调用方持有、跨轮保留：门铃没到的槽位不能靠全局位图反复
+ * 置位/清位来记住（那是两次 LOCK 前缀 RMW，会和 stager 抢同一条缓存行），
+ * 记在 executor 私有变量里即可，全局位图只负责传递「有新增 staged」。
+ *
+ * 不漏槽位的理由（Dekker）：
+ *   stager  = 发布 GATED  -> fetch_or 置位（seq_cst）
+ *   executor= exchange 清位（seq_cst） -> 读 slot_state
+ * 两边顺序相反，同一地址上的 seq_cst RMW 有全序，只有两种情况：
+ *   1) stager 的置位排在本次 exchange 之前 —— exchange 会取到该位，
+ *      且 acquire 语义保证随后读 slot_state 必然看到 GATED；
+ *   2) 排在之后 —— 位留在全局位图里，下一轮取到。
+ * 因此不存在「位被清掉、GATED 又没被看见」的窗口。
+ */
+static inline void ed_drain_gated_cores(uint64_t local_pending[EXE_TYPE_CNT])
+{
+    for (int type = 0; type < EXE_TYPE_CNT; type++) {
+        /*
+         * 先用 relaxed 读探一下，为 0 就不做 RMW —— 这是绝大多数轮次的路径。
+         * 读到 0 之后 stager 才置位也不会丢：本轮没清过位，位还在，下一轮取到。
+         */
+        if (atomic_load_explicit(&g_ed_gated_core_mask[type],
+                                 memory_order_relaxed) != 0) {
+            local_pending[type] |= atomic_exchange_explicit(
+                &g_ed_gated_core_mask[type], 0, memory_order_seq_cst);
+        }
+
+        uint64_t pending = local_pending[type];
+        while (pending != 0) {
+            int core = __builtin_ctzll(pending);
+            pending &= pending - 1;
+
+            bool still_gated = false;
+            for (int slot = 0; slot < AIC_OSTD; slot++) {
+                uint8_t state = atomic_load_explicit(
+                    &g_executors[type][core].slot_state[slot],
+                    memory_order_seq_cst);
+                if (state != EXE_SLOT_GATED) {
+                    continue;
+                }
+                if (!ed_poll_doorbell(type, core, slot)) {
+                    /* 门铃还没来，得继续盯着这个核 */
+                    still_gated = true;
+                }
+            }
+            if (!still_gated) {
+                local_pending[type] &= ~((uint64_t)1u << (unsigned)core);
+            }
+        }
+    }
+}
+
 #endif /* ED_ENABLE */
 
 #endif /* ALGORITHM_ED_GATE_H */

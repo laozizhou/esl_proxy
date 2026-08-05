@@ -8,7 +8,7 @@
  * 4) SPMD 任务不允许在首块结束就提前完成整任务。
  */
 
-#define _POSIX_C_SOURCE 199309L
+#define _POSIX_C_SOURCE 200809L
 
 #include <pthread.h>
 #include <stdbool.h>
@@ -132,8 +132,8 @@ static void test_drain_snapshot_maps_task_id_and_recovers_free_bits(void)
     const uint16_t cube_task = 101;
     const uint16_t vector_task = 202;
 
-    g_ctrl_t[0].task_id_map1[TASK_TYPE_CUBE][cube_core] = cube_task;
-    g_ctrl_t[0].task_id_map2[TASK_TYPE_VECTOR][vector_core] = vector_task;
+    g_ctrl_t[0].task_id_map[0][TASK_TYPE_CUBE][cube_core] = cube_task;
+    g_ctrl_t[0].task_id_map[1][TASK_TYPE_VECTOR][vector_core] = vector_task;
 
     g_ctrl_t[0].free_bitmap[TASK_TYPE_CUBE][0] &= ~cube_mask;
     g_ctrl_t[0].free_bitmap[TASK_TYPE_VECTOR][1] &= ~vector_mask;
@@ -149,8 +149,8 @@ static void test_drain_snapshot_maps_task_id_and_recovers_free_bits(void)
     bool deq_ok = batch_dequeue(&g_ctrl_t[0].completed_queue, completed, &n);
     expect_true(deq_ok, "completed_queue should receive drained task ids");
     expect_u16(n, 2, "drain should enqueue two completed task ids");
-    expect_u16(completed[0], cube_task, "slot0 snapshot should map to task_id_map1");
-    expect_u16(completed[1], vector_task, "slot1 snapshot should map to task_id_map2");
+    expect_u16(completed[0], cube_task, "slot0 snapshot should map to task_id_map[0]");
+    expect_u16(completed[1], vector_task, "slot1 snapshot should map to task_id_map[1]");
 
     expect_true((g_ctrl_t[0].free_bitmap[TASK_TYPE_CUBE][0] & cube_mask) != 0,
                 "cube free bit should be restored after drain");

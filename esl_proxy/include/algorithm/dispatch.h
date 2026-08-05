@@ -31,8 +31,12 @@ typedef struct ctrl {
      */
     _Atomic uint64_t msg_bitmap[EXE_TYPE_CNT][AIC_OSTD];
 
-    uint16_t task_id_map1[EXE_TYPE_CNT][AIC_CNT];
-    uint16_t task_id_map2[EXE_TYPE_CNT][AIC_CNT];
+    /*
+     * task_id_map[slot][type][core]：槽位 -> 在跑 task_id 的反查表，
+     * drain 时用它把 msg_bitmap 的 done 位还原成 task_id。
+     * slot 放在最外维，因此 task_id_map[s] 整体就是「slot s 的那张表」。
+     */
+    uint16_t task_id_map[AIC_OSTD][EXE_TYPE_CNT][AIC_CNT];
 
     queue_t  ready_queue[TASK_TYPE_CNT];
     queue_t  completed_queue;

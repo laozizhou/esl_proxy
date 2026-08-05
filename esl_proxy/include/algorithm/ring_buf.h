@@ -108,8 +108,19 @@ static inline int add_predecessors(uint16_t task_id, uint16_t target[], uint16_t
         if (target[i] < min_uncomplete_task)
             continue;
         WORKER_LOGF("succeed,task_id,%u,predecessor_id,%u,idx,%d", task_id, target[i], cnt);
-        uint16_t* idx = atomic_fetch_add(&g_predecessor_ring.tail, 1);
-        *idx = target[i];
+        /*
+         * 申请一个 uint16_t 槽位。不能用 atomic_fetch_add(tail, 1)：
+         * C11 对原子指针做 fetch_add 时按「整数字节」推进，+1 只挪 1 字节，
+         * 连续写入会互相踩踏（Linux/GCC 上已复现：task 9 读到前驱 256 而非 0）。
+         * CAS 里写 expected+1 走指针算术，一次前进 sizeof(uint16_t)。
+         */
+        uint16_t *slot = atomic_load_explicit(&g_predecessor_ring.tail, memory_order_relaxed);
+        while (!atomic_compare_exchange_weak_explicit(
+                   &g_predecessor_ring.tail, &slot, slot + 1,
+                   memory_order_acq_rel, memory_order_relaxed)) {
+            /* CAS 失败时 slot 已被更新为最新 tail，直接重试 */
+        }
+        *slot = target[i];
         cnt++;
     }
     ptr->cnt = cnt;
@@ -118,8 +129,19 @@ static inline int add_predecessors(uint16_t task_id, uint16_t target[], uint16_t
 
 static inline bool new_task(uint32_t task_id, uint16_t type, uint16_t count, uint32_t duration)
 {
+    /*
+     * ring 写满时在此等待消费侧推进 g_min_uncomplete_task。
+     * 原实现每自旋一圈打一条日志：ed_a12_ring_stress（10000 任务，必然撑满 ring）
+     * 实测 25 秒刷出 8000 万行，把真正的故障淹没成"卡死"。
+     * 改为按圈数采样——既不淹日志，又能区分"真卡住"（游标恒定不动）与"只是慢"。
+     * 注意：完全去掉日志会让 ring 满导致的死锁变成静默无输出的空转，无法诊断。
+     */
+    unsigned long ring_full_spins = 0;
     while ((task_id - atomic_load(&g_min_uncomplete_task)) >= RING_SIZE ) {
-        MAIN_LOGF("[orchestration] task_id = %u g_min_uncomplete_task = %u", task_id, g_min_uncomplete_task);
+        if ((++ring_full_spins & 0xFFFFFFul) == 0) {
+            MAIN_LOGF("[orchestration] ring full, task_id = %u g_min_uncomplete_task = %u spins = %lu",
+                      task_id, atomic_load(&g_min_uncomplete_task), ring_full_spins);
+        }
         spin_wait();
     }
     if (count > 1)

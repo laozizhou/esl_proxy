@@ -1,4 +1,4 @@
-#define _POSIX_C_SOURCE 199309L
+#define _POSIX_C_SOURCE 200809L
 
 #include <pthread.h>
 #include <stdint.h>
@@ -20,6 +20,34 @@
 
 #ifndef ORCH_CASE
 #define ORCH_CASE qwen3_dynamic_manual_scope.h
+#endif
+
+/*
+ * ED_PAD_BYTES：代码布局对照实验专用，默认不定义、零影响。
+ *
+ * 生成一段体积精确为 N 字节、永不被调用的死代码（内容全是 nop）。必须放在
+ * main.c 里：链接顺序把 main.o 排在最前，所以这里插多少字节，后面所有热函数
+ * （executor_worker/cutter_worker/dispatch/...）的地址就整体后移多少。
+ *
+ * 用途是分离「ED 的运行时开销」和「ED 代码把热函数地址推移带来的布局效应」：
+ * ED_ENABLE=1 时 main 因为多打印 ED 统计而变大约 896 字节，热函数因此整体
+ * 后移 896 字节。用 ED_ENABLE=0 + ED_PAD_BYTES=896 可以复现同样的地址分布，
+ * 而运行时一行 ED 代码都不执行。
+ *
+ * 用法：make ED_ENABLE=0 EXTRA_CFLAGS=-DED_PAD_BYTES=896
+ * 验证生效：nm bin/esl_proxy | grep executor_worker，地址应比未填充版本大 896。
+ */
+#ifdef ED_PAD_BYTES
+#define ED_PAD_STR2(x) #x
+#define ED_PAD_STR(x) ED_PAD_STR2(x)
+__asm__(".pushsection .text\n\t"
+        ".balign 16\n\t"
+        ".globl esl_layout_pad_never_called\n\t"
+        ".type esl_layout_pad_never_called, @function\n"
+        "esl_layout_pad_never_called:\n\t"
+        ".space " ED_PAD_STR(ED_PAD_BYTES) ", 0x90\n\t"
+        ".size esl_layout_pad_never_called, .-esl_layout_pad_never_called\n\t"
+        ".popsection");
 #endif
 
 /* Macro to stringify the include directive properly */
@@ -112,6 +140,7 @@ int main(void) {
 
 #if ED_ENABLE
     uint64_t stage_cnt = atomic_load_explicit(&g_ed_stage_cnt, memory_order_relaxed);
+    uint64_t stage_spmd_cnt = atomic_load_explicit(&g_ed_stage_spmd_cnt, memory_order_relaxed);
     uint64_t hit_cnt = atomic_load_explicit(&g_ed_hit_cnt, memory_order_relaxed);
     uint64_t self_notify_cnt = atomic_load_explicit(&g_ed_self_notify_cnt, memory_order_relaxed);
     uint64_t slot_retry_cnt = atomic_load_explicit(&g_ed_slot_retry_cnt, memory_order_relaxed);
@@ -120,6 +149,8 @@ int main(void) {
     uint64_t late_arrival_cnt = atomic_load_explicit(&g_ed_late_arrival_cnt, memory_order_relaxed);
 
     MAIN_LOGF("[ed] stage_cnt = %llu", (unsigned long long)stage_cnt);
+    /* stage_cnt 的 SPMD 分档；stage_spmd_cnt/stage_cnt 即本次覆盖率提升的来源占比 */
+    MAIN_LOGF("[ed] stage_spmd_cnt = %llu", (unsigned long long)stage_spmd_cnt);
     MAIN_LOGF("[ed] hit_cnt = %llu", (unsigned long long)hit_cnt);
     MAIN_LOGF("[ed] self_notify_cnt = %llu", (unsigned long long)self_notify_cnt);
     MAIN_LOGF("[ed] slot_retry_cnt = %llu", (unsigned long long)slot_retry_cnt);
@@ -179,9 +210,11 @@ int main(void) {
         if (g_basic_buf[i].count == 0) {
             continue;
         }
-        if (g_basic_buf[i].count != 1) {
-            continue;
-        }
+        /*
+         * 这里曾经跳过 count != 1。fanin 记账现在对所有 count 无条件累加
+         * （propagate_dispatch_fanin 与 cutter 两个生产者同口径），所以自检也必须
+         * 覆盖 count>1——否则最需要盯的新增人群恰好处于盲区。
+         */
         uint16_t cur = atomic_load_explicit(&g_dispatch_fanin[i], memory_order_relaxed);
         uint16_t tgt = g_dispatch_fanin_target[i];
         sum_target += tgt;

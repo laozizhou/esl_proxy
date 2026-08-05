@@ -59,14 +59,19 @@ extern _Atomic uint64_t g_lt_starve_with_work_cnt[LAT_TRACE_TYPE_CNT];
 extern _Atomic uint64_t g_lt_starve_waiters_sum[LAT_TRACE_TYPE_CNT];
 extern _Atomic uint64_t g_lt_free_core_sum[LAT_TRACE_TYPE_CNT];
 /*
- * send_task 的可派发核集合是 free_bitmap[type][0] | free_bitmap[type][1]：
- * PING-PONG 下每核同时只跑一个 slot，另一个用作预装载位，故任一 slot 空闲的核
+ * send_task 的可派发核集合是所有 slot 的 free_bitmap[type][*] 之并：
+ * PING-PONG 下每核同时只跑一个 slot，其余用作预装载位，故任一 slot 空闲的核
  * 都可派发（每核每轮只发一个任务，所以名额数就是这个并集的核数，记在
- * g_lt_free_core_sum）。下面两个计数器分别记录两个 slot 各自的空闲核数；
- * 交集（两 slot 全空、优先派发的核）由 slot0 + slot1 - 并集 反推，见 dump。
+ * g_lt_free_core_sum）。
+ *
+ * slot0/slot1 两个计数器只看头两个 slot（AIC_OSTD 可调，>2 时其余 slot 不单独
+ * 统计）。而「全部 slot 空闲」的核——send_task 优先派发的那批——必须单独累加，
+ * 不能用容斥反推：|A∩B| = |A|+|B|-|A∪B| 只对恰好两个集合成立，AIC_OSTD>2 时
+ * 会算出负数。
  */
 extern _Atomic uint64_t g_lt_free_slot0_sum[LAT_TRACE_TYPE_CNT];
 extern _Atomic uint64_t g_lt_free_slot1_sum[LAT_TRACE_TYPE_CNT];
+extern _Atomic uint64_t g_lt_free_allslot_sum[LAT_TRACE_TYPE_CNT];
 
 /*
  * set_mix 的净效果：它把 free_bitmap[MIX] 覆写为 CUBE 与 VECTOR 的交集，
@@ -141,9 +146,12 @@ static inline void lat_trace_setmix(uint64_t before_bits, uint64_t after_bits)
                               memory_order_relaxed);
 }
 
-/* s0/s1 为两个 slot 各自的空闲核位图；free_cnt 是 send_task 实际可派发的核数 */
+/*
+ * s0/s1 为头两个 slot 各自的空闲核位图，all 为「全部 slot 都空闲」的核位图；
+ * free_cnt 是 send_task 实际可派发的核数（任一 slot 空闲的核数）。
+ */
 static inline void lat_trace_send_call(int type, uint16_t free_cnt,
-                                       uint64_t s0, uint64_t s1)
+                                       uint64_t s0, uint64_t s1, uint64_t all)
 {
     atomic_fetch_add_explicit(&g_lt_send_call_cnt[type], 1, memory_order_relaxed);
     atomic_fetch_add_explicit(&g_lt_free_core_sum[type], free_cnt, memory_order_relaxed);
@@ -151,6 +159,8 @@ static inline void lat_trace_send_call(int type, uint16_t free_cnt,
                               (uint64_t)__builtin_popcountll(s0), memory_order_relaxed);
     atomic_fetch_add_explicit(&g_lt_free_slot1_sum[type],
                               (uint64_t)__builtin_popcountll(s1), memory_order_relaxed);
+    atomic_fetch_add_explicit(&g_lt_free_allslot_sum[type],
+                              (uint64_t)__builtin_popcountll(all), memory_order_relaxed);
 }
 
 /*
@@ -188,12 +198,13 @@ static inline void lat_trace_setmix(uint64_t before_bits, uint64_t after_bits)
     (void)after_bits;
 }
 static inline void lat_trace_send_call(int type, uint16_t free_cnt,
-                                       uint64_t s0, uint64_t s1)
+                                       uint64_t s0, uint64_t s1, uint64_t all)
 {
     (void)type;
     (void)free_cnt;
     (void)s0;
     (void)s1;
+    (void)all;
 }
 static inline void lat_trace_send_starve(int type, uint64_t waiters)
 {

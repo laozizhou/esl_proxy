@@ -16,8 +16,8 @@
 #include "early_dispatch.h"
 #include "task.h"
 
-/* 单元测试桩：ed_init_task_meta 需访问的 cutter/ring 全局 */
-struct node_list g_successor_buf[RING_SIZE];
+/* 单元测试桩：g_state_buf 由 cutter.c 定义，本用例不联 cutter.o，故在此补桩。
+ * g_successor_buf 等 ring 全局来自 shm.o（见 Makefile 的 test-ed-record 规则）。 */
 static task_state g_state_stub[RING_SIZE];
 task_state *g_state_buf = g_state_stub;
 

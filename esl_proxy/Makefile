@@ -41,7 +41,11 @@ QWEN3_CASES := qwen3_dynamic_manual_scope.h qwen3_dynamic_tensormap.h qwen3_dyna
 CC       := cc
 # -MMD -MP emits a .d alongside each .o listing the headers it included, so a
 # change to any include/algorithm/*.h (e.g. tensormap.h) rebuilds the dependent objects.
-CFLAGS   := -g -std=c11 -Wall -Wextra -pedantic -O2 -D_POSIX_C_SOURCE=199309L \
+# _POSIX_C_SOURCE 必须 >= 200809L：199309L (POSIX.1b-1993) 早于 C99，会让 macOS 的
+# <stdio.h> 隐藏 snprintf 等 C99 函数，log.c 因此报 implicit-function-declaration。
+# 200809L 是 199309L 的超集，不会丢失原有特性。改这里时 src/*.c、tests/*.c 与
+# tools/gen_compile_commands.py 里的同名 #define 必须同步，否则会触发宏重定义告警。
+CFLAGS   := -g -std=c11 -Wall -Wextra -pedantic -O2 -D_POSIX_C_SOURCE=200809L \
 	-I include/algorithm -I cases -DORCH_CASE=$(CASE) -MMD -MP -Wno-error=implicit-function-declaration
 
 # -latomic is needed on Linux but not on macOS (clang)
@@ -70,12 +74,18 @@ endif
 # Early-dispatch compile switch (Step 1+)
 ED_ENABLE ?= 1
 ED_UNFIN_THRESHOLD ?= 0xFFFF
+# 进入 ED 的最大 block 数。默认 1 = 只接非 SPMD 任务；放开的实测代价见 conf.h 说明。
+ED_SPMD_MAX_BLOCKS ?= 1
 EXEC_DURATION_SCALE ?= 10000
+# 每核每 type 的在途槽位数（预装载深度），语义见 conf.h。
+AIC_OSTD ?= 2
 # 逐任务 ready->runnable 延迟分解探针；诊断用，默认关闭。
 # 开启后 CSV 路径由运行时环境变量 LAT_TRACE_CSV 指定。
 LAT_TRACE ?= 0
 CFLAGS   += -DED_ENABLE=$(ED_ENABLE) -DED_UNFIN_THRESHOLD=$(ED_UNFIN_THRESHOLD) \
-	-DEXEC_DURATION_SCALE=$(EXEC_DURATION_SCALE) -DLAT_TRACE=$(LAT_TRACE)
+	-DED_SPMD_MAX_BLOCKS=$(ED_SPMD_MAX_BLOCKS) \
+	-DEXEC_DURATION_SCALE=$(EXEC_DURATION_SCALE) -DAIC_OSTD=$(AIC_OSTD) \
+	-DLAT_TRACE=$(LAT_TRACE)
 
 OBJ_DIR := build/obj
 BIN_DIR := bin
@@ -94,11 +104,26 @@ SRCS := \
 OBJS := $(patsubst src/%.c,$(OBJ_DIR)/%.o,$(SRCS))
 DEPS := $(OBJS:.o=.d)
 
-# Rebuild orchestration when case or orch-related flags change.
-ORCH_STAMP := $(OBJ_DIR)/.orch-stamp
-ORCH_CONFIG := case=$(CASE) tier=$(QWEN3_SPMD_TIER) log=$(MAIN_LOG) ed=$(ED_ENABLE) ed_thr=$(ED_UNFIN_THRESHOLD) dur_scale=$(EXEC_DURATION_SCALE) lat_trace=$(LAT_TRACE)
+# 配置指纹：任何影响编译结果的开关都必须出现在这里，包括 EXTRA_CFLAGS
+# （scripts/ed_a11_probe.sh、ed_a12_probe.sh 用它注入 -DED_A11_PROBE 等探针宏）。
+ORCH_STAMP := build/.orch-config
+ORCH_CONFIG := case=$(CASE) tier=$(QWEN3_SPMD_TIER) log=$(MAIN_LOG) ed=$(ED_ENABLE) ed_thr=$(ED_UNFIN_THRESHOLD) ed_spmd_max=$(ED_SPMD_MAX_BLOCKS) dur_scale=$(EXEC_DURATION_SCALE) ostd=$(AIC_OSTD) lat_trace=$(LAT_TRACE) extra=$(EXTRA_CFLAGS)
 
-.PHONY: all run clean force test-tensormap test-ed-record test-step2 test-step3 test-step4 test-step5 test-step6 test-step7 test-step9 test-cutter-window compile_commands
+# 配置切换保护：在 Makefile 解析阶段（早于任何目标被考虑）比对指纹，不一致就直接
+# 删掉全部产物，强制重编重链。
+#
+# 不能用"戳文件 + $(OBJS): $(ORCH_STAMP)"的时间戳写法：macOS 自带 GNU Make 3.81
+# 只比较到「秒」，1 秒内连续切换 CASE/ED_ENABLE 时，新戳文件与旧 .o 落在同一秒，
+# make 判定 .o 仍是最新而复用。轻则链接报 undefined symbol，重则静默链出与请求
+# 配置不符的二进制——性能数据会因此对不上配置。实测连跑 8 个 case 有 5 个中招。
+ORCH_RESET := $(shell \
+	mkdir -p $(dir $(ORCH_STAMP)); \
+	printf '%s\n' '$(ORCH_CONFIG)' | cmp -s - $(ORCH_STAMP) 2>/dev/null || { \
+		rm -rf $(OBJ_DIR) $(BIN_DIR); \
+		printf '%s\n' '$(ORCH_CONFIG)' > $(ORCH_STAMP); \
+	})
+
+.PHONY: all run clean test-tensormap test-ed-record test-step2 test-step3 test-step4 test-step5 test-step6 test-step7 test-step9 test-cutter-window test-ed-spmd compile_commands
 
 compile_commands:
 	python3 ./tools/gen_compile_commands.py
@@ -111,16 +136,6 @@ $(TARGET): $(OBJS) | $(BIN_DIR)
 $(OBJ_DIR)/%.o: src/%.c | $(OBJ_DIR)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
-
-# Rebuild when orchestration / ed config changes.
-# ORCH_CONFIG 变化时（CASE / TIER / MAIN_LOG / ED_ENABLE / ED_UNFIN_THRESHOLD 任一切换），
-# stamp 内容会改，所有 $(OBJS) 都必须重编——它们都直接或间接依赖这些宏（例如 dispatch.c
-# 与 cutter.c 都在 ED_ENABLE 下条件编译 send_task CAS / 右开窗口路径）。历史上只挂
-# main.o / early_dispatch.o / executor.o 三个对象，会在无 clean 的 ED 切换中复用旧
-# dispatch.o，导致 test-step3 全部失败，这里改成统一挂到 $(OBJS)。
-$(OBJS): $(ORCH_STAMP)
-$(ORCH_STAMP): force | $(OBJ_DIR)
-	@echo '$(ORCH_CONFIG)' | cmp -s - $@ 2>/dev/null || echo '$(ORCH_CONFIG)' > $@
 
 $(OBJ_DIR) $(BIN_DIR):
 	mkdir -p $@
@@ -140,8 +155,17 @@ $(BIN_DIR)/test_tensormap: tests/test_tensormap.c | $(BIN_DIR)
 test-ed-record: $(BIN_DIR)/test_ed_record
 	$(BIN_DIR)/test_ed_record
 
-$(BIN_DIR)/test_ed_record: tests/test_ed_record.c $(OBJ_DIR)/algorithm/early_dispatch.o $(OBJ_DIR)/algorithm/log.o | $(BIN_DIR)
-	$(CC) $(CFLAGS) tests/test_ed_record.c $(OBJ_DIR)/algorithm/early_dispatch.o $(OBJ_DIR)/algorithm/log.o -o $@ $(LDFLAGS)
+# early_dispatch.o 引用 g_basic_buf / g_ctrl_t / g_executors（均定义在 shm.c），
+# 故必须联 shm.o。该规则写于 Step 1，当时 early_dispatch.c 还没有这些依赖，
+# 后续步骤加进来后未同步更新，导致 test-ed-record 一直链接失败。
+$(BIN_DIR)/test_ed_record: tests/test_ed_record.c \
+	$(OBJ_DIR)/algorithm/early_dispatch.o \
+	$(OBJ_DIR)/algorithm/shm.o \
+	$(OBJ_DIR)/algorithm/log.o | $(BIN_DIR)
+	$(CC) $(CFLAGS) tests/test_ed_record.c \
+		$(OBJ_DIR)/algorithm/early_dispatch.o \
+		$(OBJ_DIR)/algorithm/shm.o \
+		$(OBJ_DIR)/algorithm/log.o -o $@ $(LDFLAGS)
 
 test-step2: $(BIN_DIR)/test_step2_protocol
 	$(BIN_DIR)/test_step2_protocol
@@ -258,6 +282,31 @@ $(BIN_DIR)/test_step9_gate_open: tests/test_step9_gate_open.c \
 	$(OBJ_DIR)/algorithm/early_dispatch.o \
 	$(OBJ_DIR)/algorithm/log.o | $(BIN_DIR)
 	$(CC) $(CFLAGS) tests/test_step9_gate_open.c \
+		$(OBJ_DIR)/algorithm/dispatch.o \
+		$(OBJ_DIR)/algorithm/executor.o \
+		$(OBJ_DIR)/algorithm/shm.o \
+		$(OBJ_DIR)/algorithm/early_dispatch.o \
+		$(OBJ_DIR)/algorithm/log.o -o $@ $(LDFLAGS)
+
+# SPMD（count>1）整任务 ED 回归：需要 stage(ed) + skip(send_task) + 开闸执行(executor)
+# + Hook2(cutter::resolve_dep) 四方联动，故链接全部算法对象。
+#
+# 必须递归调 $(MAKE) 并在命令行上传 ED_SPMD_MAX_BLOCKS：该旋钮默认是 1（不接 SPMD），
+# 直接构建的话测试只会 SKIP，新功能就默认没人测。命令行变量会参与子 make 的
+# parse 阶段配置指纹比对，从而正确触发重编，不会复用旋钮=1 的 .o。
+test-ed-spmd:
+	$(MAKE) ED_SPMD_MAX_BLOCKS=0xFFFF $(BIN_DIR)/test_ed_spmd_multiblock
+	$(BIN_DIR)/test_ed_spmd_multiblock
+
+$(BIN_DIR)/test_ed_spmd_multiblock: tests/test_ed_spmd_multiblock.c \
+	$(OBJ_DIR)/algorithm/cutter.o \
+	$(OBJ_DIR)/algorithm/dispatch.o \
+	$(OBJ_DIR)/algorithm/executor.o \
+	$(OBJ_DIR)/algorithm/shm.o \
+	$(OBJ_DIR)/algorithm/early_dispatch.o \
+	$(OBJ_DIR)/algorithm/log.o | $(BIN_DIR)
+	$(CC) $(CFLAGS) tests/test_ed_spmd_multiblock.c \
+		$(OBJ_DIR)/algorithm/cutter.o \
 		$(OBJ_DIR)/algorithm/dispatch.o \
 		$(OBJ_DIR)/algorithm/executor.o \
 		$(OBJ_DIR)/algorithm/shm.o \

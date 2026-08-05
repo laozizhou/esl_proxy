@@ -47,10 +47,11 @@ void init_ctrl_t(void)
             }
         }
 
-        for (int i = 0; i < EXE_TYPE_CNT; i++) {
-            for (int j = 0; j < AIC_CNT; j++) {
-                g_ctrl_t[tid].task_id_map1[i][j] = 0;
-                g_ctrl_t[tid].task_id_map2[i][j] = 0;
+        for (int s = 0; s < AIC_OSTD; s++) {
+            for (int i = 0; i < EXE_TYPE_CNT; i++) {
+                for (int j = 0; j < AIC_CNT; j++) {
+                    g_ctrl_t[tid].task_id_map[s][i][j] = 0;
+                }
             }
         }
 
@@ -108,8 +109,7 @@ static inline void drain_completed_snapshot(int tid)
                  */
                 assert(atomic_load_explicit(&g_executors[i][idx].slot_state[j],
                                             memory_order_acquire) == EXE_SLOT_EMPTY);
-                task_id[complete_cnt] = (j == 0) ? g_ctrl_t[tid].task_id_map1[i][idx]
-                                                 : g_ctrl_t[tid].task_id_map2[i][idx];
+                task_id[complete_cnt] = g_ctrl_t[tid].task_id_map[j][i][idx];
                 WORKER_LOGF("completed,complete_cnt,%u,task_id,%u,core,%llu,bitmap,%llu",
                             complete_cnt,
                             task_id[complete_cnt],
@@ -156,29 +156,31 @@ static inline void drain_completed_snapshot(int tid)
 static inline int send_task(ctrl_t *ctrl, int type)
 {
     int exe_type = type;
-    uint64_t free_s0 = atomic_load_explicit(&ctrl->free_bitmap[type][0],
-                                            memory_order_acquire);
-    uint64_t free_s1 = atomic_load_explicit(&ctrl->free_bitmap[type][1],
-                                            memory_order_acquire);
     /*
-     * PING-PONG 语义：executor 每核同时只跑一个 slot，另一个 slot 用作预装载位，
-     * 所以「任一 slot 空闲」的核都可以派发，不必等两个 slot 全空。
+     * PING-PONG 语义：executor 每核同时只跑一个 slot，其余 slot 用作预装载位，
+     * 所以「任一 slot 空闲」的核都可以派发，不必等全部 slot 空。
      */
+    uint64_t free_slot[AIC_OSTD];
+    /* avail_any：本 type 下至少一个 slot 空闲的核；avail_all：全部 slot 空闲的核 */
+    uint64_t avail_any = 0;
+    uint64_t avail_all = ~(uint64_t)0;
+    for (int j = 0; j < AIC_OSTD; j++) {
+        free_slot[j] = atomic_load_explicit(&ctrl->free_bitmap[type][j],
+                                            memory_order_acquire);
+        avail_any |= free_slot[j];
+        avail_all &= free_slot[j];
+    }
     /*
-     * 本 type 下两个 slot 都空闲的核：优先派这里，走 slot0。
-     * 口径是 type 粒度（free_bitmap 第一维即 type），不是「整个物理核空闲」。
-     */
-    uint64_t avail_both = free_s0 & free_s1;
-    /*
-     * 半空核：另一个 slot 已被占（通常是 ED staged 的任务）。这些核在旧的 AND
+     * 半空核：部分 slot 已被占（通常是 ED staged 的任务）。这些核在旧的 AND
      * 语义下整核不可用，是 ED 开启后 normal 路径饥饿的根源。把它们排在全空核
      * 之后使用，既消除饥饿，又不破坏「先把任务铺到不同核」的负载均衡——过早把
-     * 任务塞进忙核的第二个 slot 会把它绑死在该核上，别的核空出来也无法接手。
+     * 任务塞进忙核的空余 slot 会把它绑死在该核上，别的核空出来也无法接手。
      * 每核每轮只接一个任务，故名额上限仍是 AIC_CNT。
      */
-    uint64_t avail_half = (free_s0 | free_s1) & ~avail_both;
-    uint16_t cnt = (uint16_t)__builtin_popcountll(free_s0 | free_s1);
-    lat_trace_send_call(type, cnt, free_s0, free_s1);
+    uint64_t avail_part = avail_any & ~avail_all;
+    uint16_t cnt = (uint16_t)__builtin_popcountll(avail_any);
+    lat_trace_send_call(type, cnt, free_slot[0], free_slot[AIC_OSTD > 1 ? 1 : 0],
+                        avail_all);
     if (cnt <= 0) {
 #if LAT_TRACE
         /* 只在无核可发这条冷分支上取队列长度，热路径不受影响 */
@@ -202,7 +204,7 @@ static inline int send_task(ctrl_t *ctrl, int type)
     for (uint16_t i = 0; i < cnt; i++) {
         uint16_t task_id = task_ids[i];
 
-#if ED_ENABLE
+#if ED_ENABLE && !ED_ABLATE_SEND
         /*
          * Step 3：CAS(g_next_block_idx: 0 -> count) 整任务原子认领。
          * 必须在计算 core idx / 抢 free bit 之前，避免 skip 时白占 slot。
@@ -232,23 +234,31 @@ static inline int send_task(ctrl_t *ctrl, int type)
          * skip 判定过后再挑核，避免 skip 的 task 白占 free_bitmap 位。
          * cnt 按可用核数核算、skip 又不消耗名额，故单 dispatcher 下必有余量。
          */
-        assert((avail_both | avail_half) != 0);
+        assert((avail_all | avail_part) != 0);
         uint64_t idx;
         uint64_t mask;
         int slot;
-        if (avail_both != 0) {
-            idx = (uint64_t)__builtin_ctzll(avail_both);
+        if (avail_all != 0) {
+            idx = (uint64_t)__builtin_ctzll(avail_all);
             mask = (uint64_t)0x1 << idx;
-            /* 全空核走 slot0，与 executor 挑选 active slot 的顺序一致 */
-            slot = 0;
-            avail_both &= ~mask;
+            avail_all &= ~mask;
         } else {
-            idx = (uint64_t)__builtin_ctzll(avail_half);
+            idx = (uint64_t)__builtin_ctzll(avail_part);
             mask = (uint64_t)0x1 << idx;
-            /* 半空核只剩一个 slot 可用；free_s0/free_s1 是本轮快照，不会被自己改动 */
-            slot = (free_s0 & mask) != 0 ? 0 : 1;
-            avail_half &= ~mask;
+            avail_part &= ~mask;
         }
+        /*
+         * 取编号最小的空闲 slot，与 executor 挑选 active slot 的顺序一致。
+         * free_slot[] 是本轮快照，不会被本循环自己改动，故此处必有一个命中。
+         */
+        slot = -1;
+        for (int j = 0; j < AIC_OSTD; j++) {
+            if ((free_slot[j] & mask) != 0) {
+                slot = j;
+                break;
+            }
+        }
+        assert(slot >= 0);
 
         uint64_t old_free = atomic_fetch_and_explicit(
             &ctrl->free_bitmap[type][slot], ~mask, memory_order_acq_rel);
@@ -264,13 +274,9 @@ static inline int send_task(ctrl_t *ctrl, int type)
         uint32_t raw_duration = g_basic_buf[task_id & RING_MASK].duration;
         g_executors[exe_type][core].duration[slot] = SCALE_EXEC_DURATION(raw_duration);
         
-        if (slot == 1) {
-            ctrl->task_id_map2[type][idx] = task_id;
-        } else {
-            ctrl->task_id_map1[type][idx] = task_id;
-        }
+        ctrl->task_id_map[slot][type][idx] = task_id;
 
-#if ED_ENABLE
+#if ED_ENABLE && !ED_ABLATE_SEND
         /*
          * Step 4：record 必须在 RUNNABLE 发布前写；
          * 否则 Hook0/选核可能读到未初始化位置。
@@ -290,7 +296,7 @@ static inline int send_task(ctrl_t *ctrl, int type)
         lat_trace_run(task_id, LAT_TRACE_PATH_NORMAL);
         WORKER_LOGF("send,task_id,%u,core,%d,slot,%d,type,%d", task_id, core, slot, type);
         sent++;
-#if ED_ENABLE
+#if ED_ENABLE && !ED_ABLATE_SEND
         /* Step 4 Hook 0：成功发布后沿边传播 dispatch_fanin。 */
         propagate_dispatch_fanin(task_id);
 #endif
@@ -350,7 +356,7 @@ int dispatch(int tid)
     total_sent += send_task(&g_ctrl_t[tid], TASK_TYPE_MIX);
     total_sent += send_task(&g_ctrl_t[tid], TASK_TYPE_VECTOR);
     total_sent += send_task(&g_ctrl_t[tid], TASK_TYPE_CUBE);
-#if ED_ENABLE
+#if ED_ENABLE && !ED_ABLATE_ROUND
     /*
      * 已 ready 的任务优先：只有 normal 队列彻底排空才动 ED。
      * 队列非空时说明槽位仍供不应求，此时投机占位会挤掉马上就能跑的任务；
@@ -369,12 +375,79 @@ int dispatch(int tid)
 }
 
 /*
+ * 窗口关闭后的收尾：冲洗队列、置 g_is_done、打印指标。
+ *
+ * ===== 为什么这段必须单独成函数，且 dispatch_worker 里不能留任何 #if =====
+ *
+ * GCC 的栈帧在函数入口一次性开好。dispatch_worker 的栈帧压在窗口内整条热调用链
+ * （dispatch -> send_task -> ...）之上，所以它一变大，窗口内每一次调用的 %rsp
+ * 就整体挪走；只要挪动量不是 64 的倍数，整条链的栈变量就换了缓存行内偏移。
+ *
+ * 历史教训：这段收尾代码原先直接写在 dispatch_worker 里，用 #if ED_ENABLE 包着。
+ * 它本身在计时窗口之外、一次都不影响 duration，但它让 ED_ENABLE=1 的栈帧从
+ * 40 字节涨到 88 字节（+48）。实测这 48 字节平移值 9%~13% 的 makespan，并且
+ * 一度被误判成「ED 的常驻开销」。校验方式：ED_ENABLE=0 加
+ * ED_STACK_PAD_BYTES=48 单独复现该平移得 1.135x；而把地址与栈帧都对齐后，
+ * ED 死代码本身只值 1.0015x（配对检验 30/60，纯噪声）。
+ *
+ * 因此约束是：dispatch_worker 里不得出现任何随 ED_ENABLE 变化的代码，也不得有
+ * 需要跨这次调用存活的局部量（elapsed_ns 用传参而不是留在栈上，就是为此）。
+ *
+ * 顺序与原实现一致：先冲洗（此时 executor / cutter 仍在跑），再置 g_is_done
+ * 让它们退出，最后打印。
+ */
+static void __attribute__((noinline)) dispatch_finish(int tid,
+                                                      uint64_t elapsed_ns)
+{
+#if ED_ENABLE
+    /*
+     * completion 达标后再冲洗一次 ready/ed queue，补齐 send_skip 统计；
+     * 不计入 scheduler elapsed，避免把统计收口开销混进性能口径。
+     */
+    for (int i = 0; i < RING_SIZE; i++) {
+        if (!has_pending_ready_work(tid)) {
+            break;
+        }
+        dispatch(tid);
+    }
+#else
+    (void)tid;
+#endif
+
+    atomic_store(&g_is_done, true);
+
+    /* 口径见 dispatch_worker 开头说明：duration/task_tp 是含模拟执行时间的
+     * makespan 派生值 */
+    MAIN_LOGF("[scheduler] task_cnt = %u", g_completed_cnt);
+    MAIN_LOGF("[scheduler] duration = %llu ns", (unsigned long long)elapsed_ns);
+    MAIN_LOGF("[scheduler] task_tp = %f MTasks/s",
+              (float)(g_completed_cnt * 1000.0 / elapsed_ns));
+}
+
+/*
  * Dispatch worker thread entry point
  * Runs the dispatch loop for task distribution
  */
 void *dispatch_worker(void *arg)
 {
     int tid = (int)(intptr_t)arg;
+    /*
+     * ED_STACK_PAD_BYTES：栈帧对照实验专用，默认不定义、零影响。
+     *
+     * 用来人为撑大本函数的栈帧，从而单独复现「窗口内热调用链 %rsp 整体平移
+     * N 字节」的效应，不掺入任何 ED 逻辑。这是查清那笔曾被误记在 ED 头上的
+     * 常驻开销所用的工具：历史上 ED_ENABLE=1 让本函数栈帧从 40 字节涨到 88，
+     * 用 ED_STACK_PAD_BYTES=48 在 ED_ENABLE=0 上复现同样的 48 字节平移，
+     * 配对检验得 1.135x —— 与当时误判为「ED 常驻开销」的数值吻合。
+     *
+     * 用法：make ED_ENABLE=0 EXTRA_CFLAGS=-DED_STACK_PAD_BYTES=48
+     * 验证：objdump 看本函数序言，push 数 x8 + sub 立即数即为栈帧字节数。
+     */
+#ifdef ED_STACK_PAD_BYTES
+    volatile char stack_pad[ED_STACK_PAD_BYTES];
+    stack_pad[0] = 0;
+    (void)stack_pad;
+#endif
     /*
      * ===== 本函数末尾三个 [scheduler] 指标的口径 =====
      *
@@ -404,36 +477,16 @@ void *dispatch_worker(void *arg)
      *              它是系统完工速率，不是"调度器每秒能派发多少任务"
      */
     uint64_t start_ns = get_time_ns();
-    
+
     while (!atomic_load(&g_orch_is_done)) {
         dispatch(tid);
     }
-    
+
     while (atomic_load(&g_completed_cnt) < atomic_load(&g_task_id)) {
         dispatch(tid);
     }
 
-    uint64_t end_ns = get_time_ns();
-
-#if ED_ENABLE
-    /*
-     * completion 达标后再冲洗一次 ready/ed queue，补齐 send_skip 统计；
-     * 不计入 scheduler elapsed，避免把统计收口开销混进性能口径。
-     */
-    for (int i = 0; i < RING_SIZE; i++) {
-        if (!has_pending_ready_work(tid)) {
-            break;
-        }
-        dispatch(tid);
-    }
-#endif
-
-    atomic_store(&g_is_done, true);
-    uint64_t elapsed_ns = end_ns - start_ns;
-
-    /* 口径见函数开头说明：duration/task_tp 是含模拟执行时间的 makespan 派生值 */
-    MAIN_LOGF("[scheduler] task_cnt = %u", g_completed_cnt);
-    MAIN_LOGF("[scheduler] duration = %llu ns", (unsigned long long)elapsed_ns);
-    MAIN_LOGF("[scheduler] task_tp = %f MTasks/s",(float)(g_completed_cnt * 1000.0 / elapsed_ns));
+    /* 收尾一律交给 dispatch_finish，本函数不得出现 #if ED_ENABLE，原因见那里 */
+    dispatch_finish(tid, get_time_ns() - start_ns);
     return NULL;
 }

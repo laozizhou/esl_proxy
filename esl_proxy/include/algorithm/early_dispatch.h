@@ -118,10 +118,33 @@ extern ed_pred_snapshot_t g_ed_pred_snapshot[RING_SIZE];
 /* Hook 1 消费者队列：STAGING 状态的 s-task 等待 try_early_dispatch */
 extern queue_t g_ed_ready_queue;
 
+/*
+ * g_ed_gated_core_mask[type]：位 core 置 1 表示「该核可能有 GATED 槽位待开闸」。
+ *
+ * 存在的唯一理由是性能。executor 主扫描每轮要看
+ * EXE_TYPE_CNT*AIC_CNT*AIC_OSTD 个槽位，整段运行是百万次量级；一旦把
+ * 「这个槽位是不是 GATED」放进那条循环，占绝大多数的 EMPTY 槽位每次都要
+ * 多一次比较，实测 makespan 整体慢 20%~65%（见 scripts/ed_overhead_probe.py）。
+ * 有了这张索引，executor 每轮只需 EXE_TYPE_CNT 次 relaxed 读就能确认
+ * 「全场没有 staged 槽位」，主扫描循环里一行 ED 代码都不剩。
+ *
+ * 置位方：try_early_dispatch 发布 GATED 之后；清位方：executor 开闸之后。
+ * 两侧顺序相反，靠 seq_cst RMW 构成 Dekker，细节见 ed_gate.h。
+ */
+_Static_assert(AIC_CNT <= 64, "g_ed_gated_core_mask 用单个 uint64_t 存核位图");
+extern _Atomic uint64_t g_ed_gated_core_mask[EXE_TYPE_CNT];
+
 /* -------------------------------------------------------------------------
  * ed metrics（运行结束时 main 打印；relaxed 更新即可）
  * ------------------------------------------------------------------------- */
 extern _Atomic uint64_t g_ed_stage_cnt;
+/*
+ * g_ed_stage_spmd_cnt：stage_cnt 中 count>1（SPMD）任务的部分。
+ * 覆盖率归因用：ED 省下的是「一次 ready->runnable 空等」这段固定延迟，而 count=N
+ * 的任务执行时长是 N 倍，单任务相对收益约按 1/N 衰减。因此总覆盖率里 SPMD 的占比
+ * 必须能单独看到，否则无法区分「真提升」和「被长任务摊薄」。
+ */
+extern _Atomic uint64_t g_ed_stage_spmd_cnt;
 extern _Atomic uint64_t g_ed_hit_cnt;
 extern _Atomic uint64_t g_ed_self_notify_cnt;
 extern _Atomic uint64_t g_ed_slot_retry_cnt;
@@ -201,6 +224,21 @@ void ed_notify_once(uint32_t task_id, uint64_t record, ed_notify_source_t source
 void propagate_dispatch_fanin(uint16_t p_id);
 int  try_early_dispatch(int tid);
 #endif
+
+/*
+ * ED 准入判据：三个调用点（Hook 0 的 ed_maybe_enter_staging、cutter 的
+ * cutter_maybe_enter_staging、stager 的 try_early_dispatch）必须共用本函数，
+ * 口径不一致会让覆盖率随线程时序抖动、难以复现。
+ *
+ * count==0 是 phantom（尚未 new_task 的脏槽），恒被拒；上限见 ED_SPMD_MAX_BLOCKS。
+ *
+ * 写成取 uint32_t 的函数而不是宏，是为了避开 -Wtype-limits：ED_SPMD_MAX_BLOCKS
+ * 默认 0xFFFF，若直接拿 uint16_t 的 count 与它比较，编译器会判定该比较恒为真。
+ */
+static inline bool ed_count_admitted(uint32_t count)
+{
+    return count != 0u && count <= (uint32_t)(ED_SPMD_MAX_BLOCKS);
+}
 
 /* 提取 bitmap 中第 nth 个置位（0-indexed），供 pick_stage_core 随机选核 */
 static inline int pick_nth_bit(uint64_t bitmap, int nth)

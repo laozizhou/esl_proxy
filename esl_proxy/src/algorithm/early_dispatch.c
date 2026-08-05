@@ -44,8 +44,10 @@ _Atomic uint32_t  g_dispatch_tag[RING_SIZE];
 atomic_flag       g_ed_edge_lock[RING_SIZE];
 ed_pred_snapshot_t g_ed_pred_snapshot[RING_SIZE];
 queue_t           g_ed_ready_queue;
+_Atomic uint64_t  g_ed_gated_core_mask[EXE_TYPE_CNT];
 
 _Atomic uint64_t g_ed_stage_cnt;
+_Atomic uint64_t g_ed_stage_spmd_cnt;
 _Atomic uint64_t g_ed_hit_cnt;
 _Atomic uint64_t g_ed_self_notify_cnt;
 _Atomic uint64_t g_ed_slot_retry_cnt;
@@ -201,7 +203,12 @@ void ed_init(void)
     memset(&g_ed_ready_queue, 0, sizeof g_ed_ready_queue);
     atomic_flag_clear(&g_ed_ready_queue.lock);
 
+    for (int t = 0; t < EXE_TYPE_CNT; t++) {
+        atomic_init(&g_ed_gated_core_mask[t], 0);
+    }
+
     atomic_store_explicit(&g_ed_stage_cnt, 0, memory_order_relaxed);
+    atomic_store_explicit(&g_ed_stage_spmd_cnt, 0, memory_order_relaxed);
     atomic_store_explicit(&g_ed_hit_cnt, 0, memory_order_relaxed);
     atomic_store_explicit(&g_ed_self_notify_cnt, 0, memory_order_relaxed);
     atomic_store_explicit(&g_ed_slot_retry_cnt, 0, memory_order_relaxed);
@@ -244,8 +251,11 @@ void ed_lat_mark_runnable(uint16_t task_id, int path)
     /*
      * tag 不匹配的两种正常情况，都应当丢弃样本：
      * 1) 零前驱任务从不打 ready 点，不存在"空等依赖"这段延迟；
-     * 2) 样本已被本代首次调用消费（count>1 的任务会按 block 多次派发）。
+     * 2) 样本已被本代首次调用消费。
      * 用 CAS 把 tag 置回 INVALID，保证每代任务只贡献一个样本。
+     *
+     * 注意 count>1 的 SPMD 任务同样只派发一次（整任务一个条目、全部 block 在同一
+     * 槽位顺序执行），因此这里不存在"同一代被多次采样"的情形。
      */
     if (!atomic_compare_exchange_strong_explicit(
             &g_ed_ready_tag[idx], &expected_tag, ED_TASK_TAG_INVALID,
@@ -363,7 +373,12 @@ static inline void ed_maybe_enter_staging(uint16_t s_id, uint16_t s_idx, uint16_
     if (fanin_now != g_dispatch_fanin_target[s_idx]) {
         return;
     }
-    if (g_basic_buf[s_idx].count != 1) {
+    /*
+     * count>1（SPMD）现在也准入：整任务作为一个条目 stage 到单个槽位，executor
+     * 照旧在该槽位上连续跑完全部 block，完成语义不变。上限由 ED_SPMD_MAX_BLOCKS
+     * 控制，count==0 的 phantom（尚未 new_task 的脏槽）恒被拒。
+     */
+    if (!ed_count_admitted(g_basic_buf[s_idx].count)) {
         return;
     }
 
@@ -397,10 +412,16 @@ void propagate_dispatch_fanin(uint16_t p_id)
         uint16_t s_id = g_successor_buf[p_idx].node[k];
         uint16_t s_idx = (uint16_t)(s_id & RING_MASK);
 
-        if (g_basic_buf[s_idx].count != 1) {
-            continue;
-        }
-
+        /*
+         * fanin 记账对所有 count 一律无条件累加，count 过滤只发生在
+         * ed_maybe_enter_staging 的准入判断里。
+         *
+         * 这里曾经有一道 count != 1 的 continue，它是 count>1 任务永远进不了 ED 的
+         * 真正原因：staging 的第一道条件是 fanin == fanin_target，计数不涨则条件
+         * 永不满足。另一个必须无条件的理由是对称性——cutter 的两条 late-arrival
+         * 路径本来就对所有 count 累加 fanin，若此处按 count 过滤，同一个任务的
+         * fanin 会由两个口径不一致的生产者共同写入，target 可能永远达不到。
+         */
         uint16_t fanin_now = (uint16_t)(atomic_fetch_add_explicit(
                                  &g_dispatch_fanin[s_idx], 1, memory_order_relaxed) +
                              1);
@@ -442,11 +463,15 @@ static int pick_stage_core(int tid, uint16_t s_id, task_type_t type, int *out_sl
         pcore_bitmap |= ((uint64_t)1u << core);
     }
 
-    uint64_t free0 = atomic_load_explicit(&g_ctrl_t[tid].free_bitmap[type][0],
-                                          memory_order_acquire);
-    uint64_t free1 = atomic_load_explicit(&g_ctrl_t[tid].free_bitmap[type][1],
-                                          memory_order_acquire);
-    uint64_t free_any = free0 | free1;   /* 本 type 下任一 slot 空闲的核 */
+    uint64_t free_slot[AIC_OSTD];
+    uint64_t free_any = 0;               /* 本 type 下任一 slot 空闲的核 */
+    uint64_t free_all = ~(uint64_t)0;    /* 本 type 下全部 slot 空闲的核 */
+    for (int j = 0; j < AIC_OSTD; j++) {
+        free_slot[j] = atomic_load_explicit(&g_ctrl_t[tid].free_bitmap[type][j],
+                                            memory_order_acquire);
+        free_any |= free_slot[j];
+        free_all &= free_slot[j];
+    }
 
     /*
      * 一选：前驱所在核，本 type 下有任一 slot 空闲即可（数据局部性优先）。
@@ -458,15 +483,15 @@ static int pick_stage_core(int tid, uint16_t s_id, task_type_t type, int *out_sl
     uint64_t candidate = pcore_bitmap & free_any;
     if (candidate == 0) {
         /*
-         * 二选：本 type 下两个 slot 都空闲的核，不再限定前驱所在核。
+         * 二选：本 type 下全部 slot 都空闲的核，不再限定前驱所在核。
          * 口径是 type 粒度，不是「整个物理核空闲」——free_bitmap 的第一维就是
          * type，同一核编号在不同 type 下是各自独立的槽位组。
          *
-         * 不退化到「忙核的第二个 slot」——staged 任务得等该核当前任务跑完才能
+         * 不退化到「忙核的空余 slot」——staged 任务得等该核当前任务跑完才能
          * 开跑，ED 的提前收益归零，还白占一个预装载名额不让 normal 用。
          * 这种情况宁可 re-push 重试（见 g_ed_slot_retry_cnt）。
          */
-        candidate = free0 & free1;
+        candidate = free_all;
     }
     if (candidate == 0) {
         return -1;
@@ -482,7 +507,14 @@ static int pick_stage_core(int tid, uint16_t s_id, task_type_t type, int *out_sl
     int nth = (int)(rand_r(&s_ed_rand_seed) % (unsigned int)popcnt);
     int core = pick_nth_bit(candidate, nth);
     uint64_t mask = (uint64_t)1u << (uint64_t)core;
-    *out_slot = (free0 & mask) != 0 ? 0 : 1;
+    /* 取编号最小的空闲 slot；candidate 由 free_slot[] 推导，必有一个命中。 */
+    *out_slot = 0;
+    for (int j = 0; j < AIC_OSTD; j++) {
+        if ((free_slot[j] & mask) != 0) {
+            *out_slot = j;
+            break;
+        }
+    }
     return core;
 }
 
@@ -499,7 +531,28 @@ int try_early_dispatch(int tid)
         return 0;
     }
 
-    if (g_basic_buf[s_idx].count != 1) {
+    /*
+     * 换代校验必须早于读 count：count 是非原子 payload，且下面要当作 CAS 的目标值。
+     * 若读到上一代的 count，认领量就与 send_task 的 0->count 不一致，收尾自检
+     * （main.c 的 block_leaked）会误报，且两条路径的互斥前提被破坏。
+     * tag 不匹配说明该 ring slot 已换代，本代 spec_state 已被 ed_init_task_meta
+     * 重置，直接丢弃即可，不能 re-push。
+     */
+    if (atomic_load_explicit(&g_ring_task_tag[s_idx], memory_order_acquire) !=
+        (uint32_t)s_id) {
+        return 0;
+    }
+
+    /*
+     * 准入必须在 CAS 之前，且 count==0 尤其不能漏：CAS(nbi, expect 0, desire 0) 会
+     * 平凡成功并返回 true，ED 会误以为认领成功而把 phantom 槽位发布进 executor。
+     * 与 send_task 的 R18 兜底对齐。
+     *
+     * 这里重复判一次（两个 staging 入口已判过）不是冗余：s_id 是从队列里取出来的，
+     * 入队与出队之间 ring slot 可能换代，count 已经不是入队时那个了。
+     */
+    uint16_t count = g_basic_buf[s_idx].count;
+    if (!ed_count_admitted(count)) {
         return 0;
     }
 
@@ -517,9 +570,14 @@ int try_early_dispatch(int tid)
         goto re_push_slot_busy;
     }
 
+    /*
+     * 整任务原子认领 0 -> count，与 send_task 完全同口径。
+     * 不能写字面量 1：main.c 收尾自检以 nbi == count 判定 block_leaked，对 count>1
+     * 的任务写 1 会误报泄漏。count==1 时本式退化为原来的 0->1。
+     */
     uint16_t expected_blk = 0;
     if (!atomic_compare_exchange_strong_explicit(
-            &g_next_block_idx[s_idx], &expected_blk, 1, memory_order_acq_rel,
+            &g_next_block_idx[s_idx], &expected_blk, count, memory_order_acq_rel,
             memory_order_relaxed)) {
         atomic_fetch_or_explicit(&g_ctrl_t[tid].free_bitmap[type][slot], core_mask,
                                  memory_order_release);
@@ -540,13 +598,16 @@ int try_early_dispatch(int tid)
     g_executors[type][core].block_idx[slot] = 0;
     uint32_t raw_duration = g_basic_buf[s_idx].duration;
     g_executors[type][core].duration[slot] = SCALE_EXEC_DURATION(raw_duration);
-    if (slot == 1) {
-        g_ctrl_t[tid].task_id_map2[type][core] = s_id;
-    } else {
-        g_ctrl_t[tid].task_id_map1[type][core] = s_id;
-    }
+    g_ctrl_t[tid].task_id_map[slot][type][core] = s_id;
     atomic_store_explicit(&g_executors[type][core].slot_state[slot],
                           EXE_SLOT_GATED, memory_order_release);
+    /*
+     * 置位必须晚于上面发布 GATED，且必须是 seq_cst：executor 侧是「先清位、
+     * 再读 slot_state」，两边顺序相反才能保证不漏。若这里用 relaxed，
+     * executor 可能先清掉位、又没看到 GATED，该槽位就永远没人来开闸。
+     */
+    atomic_fetch_or_explicit(&g_ed_gated_core_mask[type], core_mask,
+                             memory_order_seq_cst);
 
 #if ED_A10_FORCE_SELF_NOTIFY
     /*
@@ -566,6 +627,14 @@ int try_early_dispatch(int tid)
     uint64_t record = ED_PACK_RECORD((uint32_t)s_id, packed);
     atomic_store_explicit(&g_staged_slot_record[s_idx], record, memory_order_seq_cst);
     atomic_fetch_add_explicit(&g_ed_stage_cnt, 1, memory_order_relaxed);
+    /*
+     * 按 count 分档，用于归因：ED 的收益是「一次 ready->runnable 空等」的固定节省，
+     * 而 count=N 的任务执行时长是 N 倍，单任务相对收益约按 1/N 衰减。因此总覆盖率
+     * 上涨多少来自 SPMD 任务必须能单独看到，否则无法判断收益是被摊薄还是真提升。
+     */
+    if (count > 1) {
+        atomic_fetch_add_explicit(&g_ed_stage_spmd_cnt, 1, memory_order_relaxed);
+    }
 
 #if ED_A10_FORCE_SELF_NOTIFY
     /*
@@ -612,6 +681,7 @@ _Atomic uint64_t g_lt_starve_waiters_sum[LAT_TRACE_TYPE_CNT];
 _Atomic uint64_t g_lt_free_core_sum[LAT_TRACE_TYPE_CNT];
 _Atomic uint64_t g_lt_free_slot0_sum[LAT_TRACE_TYPE_CNT];
 _Atomic uint64_t g_lt_free_slot1_sum[LAT_TRACE_TYPE_CNT];
+_Atomic uint64_t g_lt_free_allslot_sum[LAT_TRACE_TYPE_CNT];
 _Atomic uint64_t g_lt_setmix_call_cnt;
 _Atomic uint64_t g_lt_setmix_before_sum;
 _Atomic uint64_t g_lt_setmix_after_sum;
@@ -635,6 +705,7 @@ void lat_trace_init(void)
         atomic_store_explicit(&g_lt_free_core_sum[t], 0, memory_order_relaxed);
         atomic_store_explicit(&g_lt_free_slot0_sum[t], 0, memory_order_relaxed);
         atomic_store_explicit(&g_lt_free_slot1_sum[t], 0, memory_order_relaxed);
+        atomic_store_explicit(&g_lt_free_allslot_sum[t], 0, memory_order_relaxed);
     }
     atomic_store_explicit(&g_lt_setmix_call_cnt, 0, memory_order_relaxed);
     atomic_store_explicit(&g_lt_setmix_before_sum, 0, memory_order_relaxed);
@@ -667,7 +738,7 @@ void lat_trace_dump(void)
             continue;
         }
         /*
-         * free_sum 口径 = popcount(slot0 | slot1)，即 send_task 可派发的核数
+         * free_sum 口径 = popcount(所有 slot 的并集)，即 send_task 可派发的核数
          * （任一 slot 空闲即可用，每核每轮一个名额），上限 AIC_CNT。
          * 与旧版要求两 slot 全空的 free_core_mean 不可直接比较。
          */
@@ -675,12 +746,14 @@ void lat_trace_dump(void)
                                                   memory_order_relaxed) / (double)calls;
         double s1m = (double)atomic_load_explicit(&g_lt_free_slot1_sum[t],
                                                   memory_order_relaxed) / (double)calls;
+        double allm = (double)atomic_load_explicit(&g_lt_free_allslot_sum[t],
+                                                   memory_order_relaxed) / (double)calls;
         double anym = (double)free_sum / (double)calls;
         MAIN_LOGF("[trace] %s: calls = %llu, usable_core_mean = %.2f",
                   type_name[t], (unsigned long long)calls, anym);
-        /* both = 两 slot 全空的核（优先派这里）；容斥：|A∩B| = |A|+|B|-|A∪B| */
-        MAIN_LOGF("[trace] %s: free slot0 = %.2f, slot1 = %.2f, both = %.2f, usable_core = %.2f",
-                  type_name[t], s0m, s1m, s0m + s1m - anym, anym);
+        /* all_free = 全部 slot 都空闲的核，send_task 优先派这批 */
+        MAIN_LOGF("[trace] %s: free slot0 = %.2f, slot1 = %.2f, all_free = %.2f, usable_core = %.2f",
+                  type_name[t], s0m, s1m, allm, anym);
         MAIN_LOGF("[trace] %s: starve = %llu (%.2f%%), starve_with_waiters = %llu (%.2f%%)",
                   type_name[t], (unsigned long long)starve,
                   100.0 * (double)starve / (double)calls,

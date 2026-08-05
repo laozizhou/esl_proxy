@@ -20,7 +20,7 @@
  * skip_cnt++/side-effect-free 三条主要断言都会失败。
  */
 
-#define _POSIX_C_SOURCE 199309L
+#define _POSIX_C_SOURCE 200809L
 
 #include <pthread.h>
 #include <stdbool.h>
@@ -146,8 +146,8 @@ static void test_step3_count_zero_skips_without_side_effects(void)
                                                 memory_order_relaxed);
     uint16_t map1_before[AIC_CNT];
     uint16_t map2_before[AIC_CNT];
-    memcpy(map1_before, g_ctrl_t[0].task_id_map1[type], sizeof(map1_before));
-    memcpy(map2_before, g_ctrl_t[0].task_id_map2[type], sizeof(map2_before));
+    memcpy(map1_before, g_ctrl_t[0].task_id_map[0][type], sizeof(map1_before));
+    memcpy(map2_before, g_ctrl_t[0].task_id_map[1][type], sizeof(map2_before));
     uint8_t slot_before[AIC_CNT][AIC_OSTD];
     for (int core = 0; core < AIC_CNT; core++) {
         for (int slot = 0; slot < AIC_OSTD; slot++) {
@@ -183,12 +183,12 @@ static void test_step3_count_zero_skips_without_side_effects(void)
     expect_u64(atomic_load_explicit(&g_ctrl_t[0].msg_bitmap[type][1],
                                     memory_order_relaxed),
                msg1_before, "count==0: msg_bitmap[type][1] unchanged");
-    expect_true(memcmp(map1_before, g_ctrl_t[0].task_id_map1[type],
+    expect_true(memcmp(map1_before, g_ctrl_t[0].task_id_map[0][type],
                        sizeof(map1_before)) == 0,
-                "count==0: task_id_map1 unchanged");
-    expect_true(memcmp(map2_before, g_ctrl_t[0].task_id_map2[type],
+                "count==0: task_id_map[0] unchanged");
+    expect_true(memcmp(map2_before, g_ctrl_t[0].task_id_map[1][type],
                        sizeof(map2_before)) == 0,
-                "count==0: task_id_map2 unchanged");
+                "count==0: task_id_map[1] unchanged");
 
     for (int core = 0; core < AIC_CNT; core++) {
         for (int slot = 0; slot < AIC_OSTD; slot++) {
@@ -232,8 +232,8 @@ static void test_step3_count1_claims_full_count(void)
         &g_executors[TASK_TYPE_CUBE][0].slot_state[0], memory_order_acquire);
     expect_u16((uint16_t)state, (uint16_t)EXE_SLOT_RUNNABLE,
                "count==1: slot_state must be RUNNABLE after send");
-    expect_u16(g_ctrl_t[0].task_id_map1[TASK_TYPE_CUBE][0], task_id,
-               "count==1: task_id_map1 must map to dispatched task");
+    expect_u16(g_ctrl_t[0].task_id_map[0][TASK_TYPE_CUBE][0], task_id,
+               "count==1: task_id_map[0] must map to dispatched task");
     expect_u64(atomic_load_explicit(&g_ed_send_skip_cnt, memory_order_relaxed),
                0ULL, "count==1: send_skip_cnt stays 0 on successful CAS");
 }
@@ -269,9 +269,9 @@ static void test_step3_count1_second_send_skips(void)
         &g_ctrl_t[0].msg_bitmap[TASK_TYPE_CUBE][1], memory_order_relaxed);
     uint16_t map1_snapshot[AIC_CNT];
     uint16_t map2_snapshot[AIC_CNT];
-    memcpy(map1_snapshot, g_ctrl_t[0].task_id_map1[TASK_TYPE_CUBE],
+    memcpy(map1_snapshot, g_ctrl_t[0].task_id_map[0][TASK_TYPE_CUBE],
            sizeof(map1_snapshot));
-    memcpy(map2_snapshot, g_ctrl_t[0].task_id_map2[TASK_TYPE_CUBE],
+    memcpy(map2_snapshot, g_ctrl_t[0].task_id_map[1][TASK_TYPE_CUBE],
            sizeof(map2_snapshot));
 
     /* 复位 slot0 core0 的 slot_state：模拟 executor 尚未完成，dispatcher 侧
@@ -306,12 +306,12 @@ static void test_step3_count1_second_send_skips(void)
                                     memory_order_relaxed),
                msg1_before,
                "count==1 (dedup): msg_bitmap[cube][1] unchanged on skip");
-    expect_true(memcmp(map1_snapshot, g_ctrl_t[0].task_id_map1[TASK_TYPE_CUBE],
+    expect_true(memcmp(map1_snapshot, g_ctrl_t[0].task_id_map[0][TASK_TYPE_CUBE],
                        sizeof(map1_snapshot)) == 0,
-                "count==1 (dedup): task_id_map1 unchanged on skip");
-    expect_true(memcmp(map2_snapshot, g_ctrl_t[0].task_id_map2[TASK_TYPE_CUBE],
+                "count==1 (dedup): task_id_map[0] unchanged on skip");
+    expect_true(memcmp(map2_snapshot, g_ctrl_t[0].task_id_map[1][TASK_TYPE_CUBE],
                        sizeof(map2_snapshot)) == 0,
-                "count==1 (dedup): task_id_map2 unchanged on skip");
+                "count==1 (dedup): task_id_map[1] unchanged on skip");
 }
 
 /*
@@ -342,8 +342,8 @@ static void test_step3_count_gt1_claims_full_count(void)
         &g_executors[TASK_TYPE_CUBE][0].slot_state[0], memory_order_acquire);
     expect_u16((uint16_t)state, (uint16_t)EXE_SLOT_RUNNABLE,
                "count>1: slot_state must be RUNNABLE after send");
-    expect_u16(g_ctrl_t[0].task_id_map1[TASK_TYPE_CUBE][0], task_id,
-               "count>1: task_id_map1 must map to dispatched task");
+    expect_u16(g_ctrl_t[0].task_id_map[0][TASK_TYPE_CUBE][0], task_id,
+               "count>1: task_id_map[0] must map to dispatched task");
 }
 
 /*
@@ -429,9 +429,9 @@ static void test_step3_cas_preclaimed_no_side_effects(void)
         &g_ctrl_t[0].msg_bitmap[TASK_TYPE_CUBE][1], memory_order_relaxed);
     uint16_t map1_before[AIC_CNT];
     uint16_t map2_before[AIC_CNT];
-    memcpy(map1_before, g_ctrl_t[0].task_id_map1[TASK_TYPE_CUBE],
+    memcpy(map1_before, g_ctrl_t[0].task_id_map[0][TASK_TYPE_CUBE],
            sizeof(map1_before));
-    memcpy(map2_before, g_ctrl_t[0].task_id_map2[TASK_TYPE_CUBE],
+    memcpy(map2_before, g_ctrl_t[0].task_id_map[1][TASK_TYPE_CUBE],
            sizeof(map2_before));
     uint8_t slot0_state_before = atomic_load_explicit(
         &g_executors[TASK_TYPE_CUBE][0].slot_state[0], memory_order_acquire);
@@ -465,12 +465,12 @@ static void test_step3_cas_preclaimed_no_side_effects(void)
                                     memory_order_relaxed),
                msg1_before,
                "pre-claimed: msg_bitmap[cube][1] unchanged");
-    expect_true(memcmp(map1_before, g_ctrl_t[0].task_id_map1[TASK_TYPE_CUBE],
+    expect_true(memcmp(map1_before, g_ctrl_t[0].task_id_map[0][TASK_TYPE_CUBE],
                        sizeof(map1_before)) == 0,
-                "pre-claimed: task_id_map1 unchanged");
-    expect_true(memcmp(map2_before, g_ctrl_t[0].task_id_map2[TASK_TYPE_CUBE],
+                "pre-claimed: task_id_map[0] unchanged");
+    expect_true(memcmp(map2_before, g_ctrl_t[0].task_id_map[1][TASK_TYPE_CUBE],
                        sizeof(map2_before)) == 0,
-                "pre-claimed: task_id_map2 unchanged");
+                "pre-claimed: task_id_map[1] unchanged");
     expect_u16((uint16_t)atomic_load_explicit(
                    &g_executors[TASK_TYPE_CUBE][0].slot_state[0],
                    memory_order_acquire),
@@ -532,7 +532,7 @@ static void test_step3_batch_skip_then_next_dispatches(void)
     expect_u16(atomic_load_explicit(&g_next_block_idx[send_idx], memory_order_acquire),
                count, "batch skip+send: second task should claim nbi to count");
 
-    expect_u16(g_ctrl_t[0].task_id_map1[type][0], send_task_id,
+    expect_u16(g_ctrl_t[0].task_id_map[0][type][0], send_task_id,
                "batch skip+send: second task should use core0 slot0");
     expect_u16((uint16_t)atomic_load_explicit(&g_executors[type][0].slot_state[0],
                                               memory_order_acquire),

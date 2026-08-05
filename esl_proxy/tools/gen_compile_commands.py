@@ -24,7 +24,7 @@ CFLAGS = [
     "-Wextra",
     "-pedantic",
     "-O2",
-    "-D_POSIX_C_SOURCE=199309L",
+    "-D_POSIX_C_SOURCE=200809L",
     "-I",
     "include/algorithm",
     "-I",

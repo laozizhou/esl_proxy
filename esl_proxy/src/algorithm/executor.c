@@ -6,7 +6,7 @@
  * C11 standard with _Atomic for lock-free concurrency.
  */
 
-#define _POSIX_C_SOURCE 199309L
+#define _POSIX_C_SOURCE 200809L
 
 #include "conf.h"
 #include <time.h>
@@ -59,7 +59,7 @@ static inline void complete_slot(int type, int core, int slot, uint16_t task_id_
     executor_t *e = &g_executors[type][core];
     e->block_idx[slot] = 0;
     e->idx = AIC_OSTD;
-#if ED_ENABLE
+#if ED_ENABLE && !ED_ABLATE_COMPLETE
     /* Step 2：仅做 tag 校验后清记录，不接 Hook。 */
     ed_task_dispatch_record_clear(task_id_done);
     uint32_t live_tag = atomic_load_explicit(
@@ -78,11 +78,19 @@ void* executor_worker(void *arg)
 {
     (void)arg;
     int total_write_cnt = 0;
+#if ED_ENABLE && !ED_ABLATE_GATE
+    /* executor 私有的「待开闸核」集合，跨轮保留，详见 ed_drain_gated_cores */
+    uint64_t gated_pending[EXE_TYPE_CNT] = {0};
+#endif
 #if ED_ENABLE && ED_A11_PROBE
     uint64_t iterations = 0;
 #endif
     while (!atomic_load(&g_is_done))
     {
+#if ED_ENABLE && !ED_ABLATE_GATE
+        /* 必须早于主扫描：本轮开闸的槽位应当本轮就能被认领起跑 */
+        ed_drain_gated_cores(gated_pending);
+#endif
 #if ED_ENABLE && ED_A11_PROBE
         iterations++;
         if ((iterations % ED_A11_DUMP_PERIOD) == 0) {
@@ -113,17 +121,15 @@ void* executor_worker(void *arg)
                     for (int slot = 0; slot < AIC_OSTD; slot++) {
                         uint8_t state = atomic_load_explicit(&e->slot_state[slot],
                                                              memory_order_acquire);
-#if ED_ENABLE
-                        if (state != EXE_SLOT_RUNNABLE) {
-                            if (!ed_poll_doorbell(exe_type, core, slot)) {
-                                continue;
-                            }
-                        }
-#else
+                        /*
+                         * 这条循环每轮扫 EXE_TYPE_CNT*AIC_CNT*AIC_OSTD 个槽位，
+                         * 整段运行是百万次量级，因此不允许出现任何 ED 相关判断——
+                         * GATED 槽位统一由循环外的 ed_drain_gated_cores 处理，
+                         * 开闸后 slot_state 已是 RUNNABLE，这里照常认领。
+                         */
                         if (state != EXE_SLOT_RUNNABLE) {
                             continue;
                         }
-#endif
                         e->idx = (uint8_t)slot;
                         active = (uint8_t)slot;
                         break;
