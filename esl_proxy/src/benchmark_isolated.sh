@@ -9,16 +9,28 @@
 # between -- cheaper and simpler than the round-based interleaving
 # benchmark_dedup.sh needs.
 #
-# Usage (run from the esl_proxy/esl_proxy repo root, after building
-# bin/orch_only_baseline, bin/orch_only_dedup, bin/sched_only, and
-# generating dag_csv/dag_baseline.csv + dag_csv/dag_dedup.csv):
-#   ./src/benchmark_isolated.sh [N_RUNS]
+# Usage (run from the esl_proxy/esl_proxy repo root, after building the
+# orch_only baseline/dedup binaries, the shared sched_only binary, and
+# generating the matching baseline/dedup CSVs via dag_export):
+#   ./src/benchmark_isolated.sh [N_RUNS] [ORCH_BASE_BIN] [ORCH_DEDUP_BIN] [CSV_BASE] [CSV_DEDUP]
 #
-# Default N_RUNS=200.
+# Defaults match the original qwen3_dynamic_tensormap.h TIER=2 setup:
+#   N_RUNS=200
+#   ORCH_BASE_BIN=bin/orch_only_baseline
+#   ORCH_DEDUP_BIN=bin/orch_only_dedup
+#   CSV_BASE=dag_csv/dag_baseline.csv
+#   CSV_DEDUP=dag_csv/dag_dedup.csv
+#
+# sched_only itself is case-agnostic (reads whatever CSV it's given), so
+# there's no separate binary to parameterize for it -- always bin/sched_only.
 
 set -u
 
 N=${1:-200}
+ORCH_BASE_BIN=${2:-bin/orch_only_baseline}
+ORCH_DEDUP_BIN=${3:-bin/orch_only_dedup}
+CSV_BASE=${4:-dag_csv/dag_baseline.csv}
+CSV_DEDUP=${5:-dag_csv/dag_dedup.csv}
 
 stats() {
     local name=$1
@@ -44,11 +56,11 @@ orch_base_tp=()
 orch_dedup_time=()
 orch_dedup_tp=()
 for i in $(seq 1 "$N"); do
-    out=$(./bin/orch_only_baseline 2>&1)
+    out=$("$ORCH_BASE_BIN" 2>&1)
     orch_base_time+=("$(echo "$out" | grep -oP '\[orchestration\] elapsed_time = \K[0-9]+')")
     orch_base_tp+=("$(echo "$out" | grep -oP '\[orchestration\] task_tp = \K[0-9.]+')")
 
-    out=$(./bin/orch_only_dedup 2>&1)
+    out=$("$ORCH_DEDUP_BIN" 2>&1)
     orch_dedup_time+=("$(echo "$out" | grep -oP '\[orchestration\] elapsed_time = \K[0-9]+')")
     orch_dedup_tp+=("$(echo "$out" | grep -oP '\[orchestration\] task_tp = \K[0-9.]+')")
 done
@@ -66,7 +78,7 @@ sched_dedup_tp=()
 sched_base_missing=0
 sched_dedup_missing=0
 for i in $(seq 1 "$N"); do
-    out=$(./bin/sched_only dag_csv/dag_baseline.csv 2>&1)
+    out=$(./bin/sched_only "$CSV_BASE" 2>&1)
     sched_base_time+=("$(echo "$out" | grep -oP '\[sched_only\] elapsed_time = \K[0-9]+')")
     sched_base_tp+=("$(echo "$out" | grep -oP '\[sched_only\] task_tp = \K[0-9.]+')")
     sc=$(echo "$out" | grep -oP '\[scheduler\] task_cnt = \K[0-9]+')
@@ -75,7 +87,7 @@ for i in $(seq 1 "$N"); do
         sched_base_missing=$((sched_base_missing + 1))
     fi
 
-    out=$(./bin/sched_only dag_csv/dag_dedup.csv 2>&1)
+    out=$(./bin/sched_only "$CSV_DEDUP" 2>&1)
     sched_dedup_time+=("$(echo "$out" | grep -oP '\[sched_only\] elapsed_time = \K[0-9]+')")
     sched_dedup_tp+=("$(echo "$out" | grep -oP '\[sched_only\] task_tp = \K[0-9.]+')")
     sc=$(echo "$out" | grep -oP '\[scheduler\] task_cnt = \K[0-9]+')
