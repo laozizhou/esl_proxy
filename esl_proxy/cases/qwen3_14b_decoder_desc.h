@@ -65,14 +65,34 @@ static inline void add_tensor_ro(uint16_t task_id, Tensor t)
     g_basic_buf[task_id & RING_MASK].data[idx] = t.buffer_addr;
 }
 
-static inline void add_tensor(uint16_t task_id, Tensor t)
+static inline void add_tensor_out(uint16_t task_id, Tensor t)
 {
     int ring_idx = task_id & RING_MASK;
     int idx = g_basic_buf[ring_idx].tensor_cnt++;
     g_basic_buf[ring_idx].data[idx] = t.buffer_addr;
 
-    int idx2 = g_task_tensor_buf[ring_idx].tensor_cnt++;
-    g_task_tensor_buf[ring_idx].data[idx2] = t;
+    int idx2 = g_task_tensor_buf[ring_idx].out_cnt++;
+    g_task_tensor_buf[ring_idx].out_data[idx2] = t;
+}
+
+static inline void add_tensor_in(uint16_t task_id, Tensor t)
+{
+    int ring_idx = task_id & RING_MASK;
+    int idx = g_basic_buf[ring_idx].tensor_cnt++;
+    g_basic_buf[ring_idx].data[idx] = t.buffer_addr;
+
+    int idx2 = g_task_tensor_buf[ring_idx].in_cnt++;
+    g_task_tensor_buf[ring_idx].in_data[idx2] = t;
+}
+
+static inline void add_tensor_inout(uint16_t task_id, Tensor t)
+{
+    int ring_idx = task_id & RING_MASK;
+    int idx = g_basic_buf[ring_idx].tensor_cnt++;
+    g_basic_buf[ring_idx].data[idx] = t.buffer_addr;
+
+    int idx2 = g_task_tensor_buf[ring_idx].inout_cnt++;
+    g_task_tensor_buf[ring_idx].inout_data[idx2] = t;
 }
 
 /* Helper: if the current thread owns task_id, call the body macro with
@@ -134,7 +154,7 @@ int orchestrator_desc(const uint64_t orch_args, int thread_id, int *created_cnt)
         DESC_DO_OR_SKIP(desc_task_id,  {
             new_task(__did, TASK_TYPE_VECTOR, 1, DUR_RMSNORM);
             add_tensor_ro(__did, ext_hidden_states);
-            add_tensor(__did, normed_tile);
+            add_tensor_out(__did, normed_tile);
             add_tensor_ro(__did, ext_input_rms_weight);
             add_scalar(__did, b0);
             add_scalar(__did, cur_valid);
@@ -142,12 +162,12 @@ int orchestrator_desc(const uint64_t orch_args, int thread_id, int *created_cnt)
 
         for (int base = 0; base < 20; base += qwen3_blocks_per_task(20)) {
             int cur_blocks = qwen3_cur_blocks(20, base);
-            Tensor q_piece = view(q_proj, (uint32_t)b0, base * 256u, 16u, cur_blocks * 256u);
             DESC_DO_OR_SKIP(desc_task_id, {
+                Tensor q_piece = view(q_proj, (uint32_t)b0, base * 256u, 16u, cur_blocks * 256u);
                 new_task(__did, TASK_TYPE_CUBE, (uint32_t)cur_blocks, DUR_Q_PROJ);
-                add_tensor(__did, normed_tile);
+                add_tensor_in(__did, normed_tile);
                 add_tensor_ro(__did, ext_wq);
-                add_tensor(__did, q_piece);
+                add_tensor_out(__did, q_piece);
                 add_scalar(__did, b0);
                 add_scalar(__did, base);
             });
@@ -155,39 +175,39 @@ int orchestrator_desc(const uint64_t orch_args, int thread_id, int *created_cnt)
 
         for (int base = 0; base < 8; base += qwen3_blocks_per_task(8)) {
             int cur_blocks = qwen3_cur_blocks(8, base);
-            Tensor k_piece = view(k_proj, (uint32_t)b0, base * 128u, 16u, cur_blocks * 128u);
             DESC_DO_OR_SKIP(desc_task_id,  {
+                Tensor k_piece = view(k_proj, (uint32_t)b0, base * 128u, 16u, cur_blocks * 128u);
                 new_task(__did, TASK_TYPE_CUBE, (uint32_t)cur_blocks, DUR_K_PROJ);
-                add_tensor(__did, normed_tile);
+                add_tensor_in(__did, normed_tile);
                 add_tensor_ro(__did, ext_wk);
-                add_tensor(__did, k_piece);
+                add_tensor_out(__did, k_piece);
                 add_scalar(__did, b0);
                 add_scalar(__did, base);
             });
 
-            Tensor v_piece = view(v_proj, (uint32_t)b0, base * 128u, 16u, cur_blocks * 128u);
             DESC_DO_OR_SKIP(desc_task_id,  {
+                Tensor v_piece = view(v_proj, (uint32_t)b0, base * 128u, 16u, cur_blocks * 128u);
                 new_task(__did, TASK_TYPE_CUBE, (uint32_t)cur_blocks, DUR_V_PROJ);
-                add_tensor(__did, normed_tile);
+                add_tensor_in(__did, normed_tile);
                 add_tensor_ro(__did, ext_wv);
-                add_tensor(__did, v_piece);
+                add_tensor_out(__did, v_piece);
                 add_scalar(__did, b0);
                 add_scalar(__did, base);
             });
         }
 
-        Tensor k0_norm = view(k_proj_norm, (uint32_t)b0, 0u, 16u, 1024u);
-        Tensor q0_norm = view(q_proj_norm, (uint32_t)b0, 0u, 16u, 5120u);
-        Tensor q0_in = view(q_proj, (uint32_t)b0, 0u, 16u, 5120u);
-        Tensor k0_in = view(k_proj, (uint32_t)b0, 0u, 16u, 1024u);
         DESC_DO_OR_SKIP(desc_task_id,  {
+            Tensor k0_norm = view(k_proj_norm, (uint32_t)b0, 0u, 16u, 1024u);
+            Tensor q0_norm = view(q_proj_norm, (uint32_t)b0, 0u, 16u, 5120u);
+            Tensor q0_in = view(q_proj, (uint32_t)b0, 0u, 16u, 5120u);
+            Tensor k0_in = view(k_proj, (uint32_t)b0, 0u, 16u, 1024u);
             new_task(__did, TASK_TYPE_VECTOR, 1, DUR_QK_NORM);
-            add_tensor(__did, k0_norm);
-            add_tensor(__did, q0_norm);
-            add_tensor(__did, q0_in);
+            add_tensor_out(__did, k0_norm);
+            add_tensor_out(__did, q0_norm);
+            add_tensor_in(__did, q0_in);
             add_tensor_ro(__did, ext_q_norm_weight);
             add_tensor_ro(__did, ext_k_norm_weight);
-            add_tensor(__did, k0_in);
+            add_tensor_in(__did, k0_in);
         });
     }
 
@@ -203,8 +223,6 @@ int orchestrator_desc(const uint64_t orch_args, int thread_id, int *created_cnt)
         Tensor all_cur_li = get_tensor(tensor_index++);
         Tensor all_oi_tmp = get_tensor(tensor_index++);
         Tensor q_padded_local = get_tensor(tensor_index++);
-        Tensor k_cache_local = view(ext_k_cache, (uint32_t)b * 8u, 0u, 8u, 128u); // batch b: 8*head_dim=1024 kv_hidden
-        Tensor v_cache_local = view(ext_v_cache, (uint32_t)b * 8u, 0u, 8u, 128u); // batch b: 8*head_dim=1024 kv_hidden
         Tensor k_cache_update = get_tensor(tensor_index++); // ROPE KV write-back
         Tensor v_cache_update = get_tensor(tensor_index++); // ROPE KV write-back
         const int64_t b_tile0 = (b / 16) * 16;
@@ -212,23 +230,25 @@ int orchestrator_desc(const uint64_t orch_args, int thread_id, int *created_cnt)
         const int64_t slot_block = slot / 128;
         const int64_t slot_offset = slot - slot_block * 128;
         {
-            Tensor k0_norm_r = view(k_proj_norm, (uint32_t)b_tile0, 0u, 16u, 1024u);
-            Tensor v0 = view(v_proj, (uint32_t)b_tile0, 0u, 16u, 1024u);
-            Tensor q0_norm_r = view(q_proj_norm, (uint32_t)b_tile0, 0u, 16u, 5120u);
             DESC_DO_OR_SKIP(desc_task_id,  {
+                Tensor k_cache_local = view(ext_k_cache, (uint32_t)b * 8u, 0u, 8u, 128u); // batch b: 8*head_dim=1024 kv_hidden
+                Tensor v_cache_local = view(ext_v_cache, (uint32_t)b * 8u, 0u, 8u, 128u); // batch b: 8*head_dim=1024 kv_hidden
+                Tensor k0_norm_r = view(k_proj_norm, (uint32_t)b_tile0, 0u, 16u, 1024u);
+                Tensor v0 = view(v_proj, (uint32_t)b_tile0, 0u, 16u, 1024u);
+                Tensor q0_norm_r = view(q_proj_norm, (uint32_t)b_tile0, 0u, 16u, 5120u);
                 new_task(__did, TASK_TYPE_VECTOR, 1, DUR_ROPE_KV_CACHE);
-                add_tensor(__did, q_padded_local);
+                add_tensor_out(__did, q_padded_local);
                 add_tensor_ro(__did, k_cache_local);
                 add_tensor_ro(__did, v_cache_local);
-                add_tensor(__did, k_cache_update);
-                add_tensor(__did, v_cache_update);
-                add_tensor(__did, k0_norm_r);
+                add_tensor_out(__did, k_cache_update);
+                add_tensor_out(__did, v_cache_update);
+                add_tensor_in(__did, k0_norm_r);
                 add_tensor_ro(__did, ext_rope_cos);
                 add_tensor_ro(__did, ext_rope_sin);
                 add_tensor_ro(__did, ext_rope_cos);
                 add_tensor_ro(__did, ext_rope_sin);
-                add_tensor(__did, v0);
-                add_tensor(__did, q0_norm_r);
+                add_tensor_in(__did, v0);
+                add_tensor_in(__did, q0_norm_r);
                 add_scalar(__did, slot_block);
                 add_scalar(__did, slot_offset);
                 add_scalar(__did, b);
@@ -237,13 +257,13 @@ int orchestrator_desc(const uint64_t orch_args, int thread_id, int *created_cnt)
 
         for (int base = 0; base < 4; base += qwen3_blocks_per_task(4)) {
             int cur_blocks = qwen3_cur_blocks(4, base);
-            Tensor row_piece = view(all_raw_scores, base * 1024u, 0u, (uint32_t)(cur_blocks * 1024), 128u);
             DESC_DO_OR_SKIP(desc_task_id,  {
+                Tensor row_piece = view(all_raw_scores, base * 1024u, 0u, (uint32_t)(cur_blocks * 1024), 128u);
                 new_task(__did, TASK_TYPE_CUBE, (uint32_t)cur_blocks, DUR_QK_MATMUL);
-                add_tensor(__did, q_padded_local);
-                add_tensor(__did, row_piece);
+                add_tensor_in(__did, q_padded_local);
+                add_tensor_out(__did, row_piece);
                 add_tensor_ro(__did, ext_block_table);
-                add_tensor(__did, k_cache_update);
+                add_tensor_in(__did, k_cache_update);
                 add_scalar(__did, b);
                 add_scalar(__did, 8);      // (1024+127)/128: KV context blocks
                 add_scalar(__did, b * 32); // block_table row offset for batch b
@@ -252,38 +272,38 @@ int orchestrator_desc(const uint64_t orch_args, int thread_id, int *created_cnt)
 
             Tensor cur_li_piece = view(all_cur_li, base * 1024u, 0u, (uint32_t)(cur_blocks * 1024), 1u);
             Tensor cur_mi_piece = view(all_cur_mi, base * 1024u, 0u, (uint32_t)(cur_blocks * 1024), 1u);
-            Tensor exp_padded_piece = view(all_exp_padded, base * 1024u, 0u, (uint32_t)(cur_blocks * 1024), 128u);
             DESC_DO_OR_SKIP(desc_task_id,  {
+                Tensor exp_padded_piece = view(all_exp_padded, base * 1024u, 0u, (uint32_t)(cur_blocks * 1024), 128u);
                 new_task(__did, TASK_TYPE_VECTOR, (uint32_t)cur_blocks, DUR_SOFTMAX);
-                add_tensor(__did, cur_li_piece);
-                add_tensor(__did, cur_mi_piece);
-                add_tensor(__did, exp_padded_piece);
+                add_tensor_out(__did, cur_li_piece);
+                add_tensor_out(__did, cur_mi_piece);
+                add_tensor_out(__did, exp_padded_piece);
                 add_scalar(__did, 8);    // (1024+127)/128: KV context blocks
                 add_scalar(__did, 1024); // context length (tokens)
                 add_scalar(__did, base);
             });
 
-            Tensor exp_piece = view(all_exp_padded, base * 1024u, 0u, (uint32_t)(cur_blocks * 1024), 128u);
             Tensor oi_tmp_piece = view(all_oi_tmp, base * 1024u, 0u, (uint32_t)(cur_blocks * 1024), 128u);
             DESC_DO_OR_SKIP(desc_task_id,  {
+                Tensor exp_piece = view(all_exp_padded, base * 1024u, 0u, (uint32_t)(cur_blocks * 1024), 128u);
                 new_task(__did, TASK_TYPE_CUBE, (uint32_t)cur_blocks, DUR_SV_MATMUL);
-                add_tensor(__did, oi_tmp_piece);
+                add_tensor_out(__did, oi_tmp_piece);
                 add_tensor_ro(__did, ext_block_table);
-                add_tensor(__did, exp_piece);
-                add_tensor(__did, v_cache_update);
+                add_tensor_in(__did, exp_piece);
+                add_tensor_in(__did, v_cache_update);
                 add_scalar(__did, 8);      // (1024+127)/128: KV context blocks
                 add_scalar(__did, b * 32); // block_table row offset for batch b
                 add_scalar(__did, base);
             });
 
-            Tensor attn_out_piece = view(attn_out[b / 16], (uint32_t)(b % 16),
-                base * 1280u, 1u, cur_blocks * 1280u);
             DESC_DO_OR_SKIP(desc_task_id,  {
+                Tensor attn_out_piece = view(attn_out[b / 16], (uint32_t)(b % 16),
+                    base * 1280u, 1u, cur_blocks * 1280u);
                 new_task(__did, TASK_TYPE_VECTOR, (uint32_t)cur_blocks, DUR_ONLINE_SOFTMAX);
-                add_tensor(__did, oi_tmp_piece);
-                add_tensor(__did, cur_mi_piece);
-                add_tensor(__did, cur_li_piece);
-                add_tensor(__did, attn_out_piece);
+                add_tensor_in(__did, oi_tmp_piece);
+                add_tensor_in(__did, cur_mi_piece);
+                add_tensor_in(__did, cur_li_piece);
+                add_tensor_inout(__did, attn_out_piece);
                 add_scalar(__did, 8); // (1024+127)/128: KV context blocks
                 add_scalar(__did, base);
             });
@@ -302,15 +322,15 @@ int orchestrator_desc(const uint64_t orch_args, int thread_id, int *created_cnt)
         for (int base = 0; base < 40; base += qwen3_blocks_per_task(40)) {
             // 40: out_proj SPMD total chunks; cols/chunk = 5120/40 = 128
             int cur_blocks = qwen3_cur_blocks(40, base);
-            Tensor attn_out_tile = view(attn_out[b0 / 16], 0u, 0u, (uint32_t)cur_valid, 5120u);
-            Tensor resid1_piece0 = view(resid1_tile, 0u, base * 128u, 16u, (uint32_t)(cur_blocks * 128));
             DESC_DO_OR_SKIP(desc_task_id,  {
+                Tensor attn_out_tile = view(attn_out[b0 / 16], 0u, 0u, (uint32_t)cur_valid, 5120u);
+                Tensor resid1_piece0 = view(resid1_tile, 0u, base * 128u, 16u, (uint32_t)(cur_blocks * 128));
                 new_task(__did, TASK_TYPE_MIX, (uint32_t)cur_blocks, DUR_OUT_PROJ);
                 add_tensor_ro(__did, ext_hidden_states);
-                add_tensor(__did, attn_out_tile);
+                add_tensor_in(__did, attn_out_tile);
                 add_tensor_ro(__did, ext_wo);
-                add_tensor(__did, resid1_piece0);
-                add_tensor(__did, gm_pipe_buffer_0);
+                add_tensor_inout(__did, resid1_piece0);
+                add_tensor_out(__did, gm_pipe_buffer_0);
                 add_scalar(__did, b0);
                 add_scalar(__did, cur_valid);
                 add_scalar(__did, base);
@@ -319,8 +339,8 @@ int orchestrator_desc(const uint64_t orch_args, int thread_id, int *created_cnt)
 
         DESC_DO_OR_SKIP(desc_task_id,  {
             new_task(__did, TASK_TYPE_VECTOR, 1, DUR_POST_RMSNORM);
-            add_tensor(__did, resid1_tile);
-            add_tensor(__did, post_norm_tile);
+            add_tensor_in(__did, resid1_tile);
+            add_tensor_out(__did, post_norm_tile);
             add_tensor_ro(__did, ext_post_rms_weight);
         });
 
@@ -330,45 +350,45 @@ int orchestrator_desc(const uint64_t orch_args, int thread_id, int *created_cnt)
             Tensor up_piece = view(up_tile, 0u, base * 512u, 16u, (uint32_t)(cur_blocks * 512));
             DESC_DO_OR_SKIP(desc_task_id,  {
                 new_task(__did, TASK_TYPE_CUBE, (uint32_t)cur_blocks, DUR_GATE_PROJ);
-                add_tensor(__did, post_norm_tile);
+                add_tensor_in(__did, post_norm_tile);
                 add_tensor_ro(__did, ext_w_gate);
-                add_tensor(__did, gate_piece);
+                add_tensor_inout(__did, gate_piece);
                 add_scalar(__did, base);
             });
 
             DESC_DO_OR_SKIP(desc_task_id,  {
                 new_task(__did, TASK_TYPE_CUBE, (uint32_t)cur_blocks, DUR_UP_PROJ);
-                add_tensor(__did, post_norm_tile);
+                add_tensor_in(__did, post_norm_tile);
                 add_tensor_ro(__did, ext_w_up);
-                add_tensor(__did, up_piece);
+                add_tensor_inout(__did, up_piece);
                 add_scalar(__did, base);
             });
 
-            Tensor mlp_piece = view(mlp_tile, 0u, base * 512u, 16u, (uint32_t)(cur_blocks * 512));
             DESC_DO_OR_SKIP(desc_task_id,  {
+                Tensor mlp_piece = view(mlp_tile, 0u, base * 512u, 16u, (uint32_t)(cur_blocks * 512));
                 new_task(__did, TASK_TYPE_VECTOR, (uint32_t)cur_blocks, DUR_SILU);
-                add_tensor(__did, gate_piece);
-                add_tensor(__did, up_piece);
-                add_tensor(__did, mlp_piece);
+                add_tensor_in(__did, gate_piece);
+                add_tensor_in(__did, up_piece);
+                add_tensor_inout(__did, mlp_piece);
                 add_scalar(__did, base);
             });
         }
         for (int base = 0; base < 40; base += qwen3_blocks_per_task(40)) {
             int cur_blocks = qwen3_cur_blocks(40, base);
             Tensor down_piece = view(down_tile, 0u, base * 128u, 16u, (uint32_t)(cur_blocks * 128));
-            Tensor resid1_piece1 = view(resid1_tile, 0u, base * 128u, 16u, (uint32_t)(cur_blocks * 128));
             DESC_DO_OR_SKIP(desc_task_id,  {
                 new_task(__did, TASK_TYPE_CUBE, (uint32_t)cur_blocks, DUR_DOWN_PROJ);
-                add_tensor(__did, mlp_tile);
+                add_tensor_in(__did, mlp_tile);
                 add_tensor_ro(__did, ext_w_down);
-                add_tensor(__did, down_piece);
+                add_tensor_inout(__did, down_piece);
                 add_scalar(__did, base);
             });
 
             DESC_DO_OR_SKIP(desc_task_id,  {
+                Tensor resid1_piece1 = view(resid1_tile, 0u, base * 128u, 16u, (uint32_t)(cur_blocks * 128));
                 new_task(__did, TASK_TYPE_VECTOR, (uint32_t)cur_blocks, DUR_DOWN_PROJ_RES);
-                add_tensor(__did, down_piece);
-                add_tensor(__did, resid1_piece1);
+                add_tensor_in(__did, down_piece);
+                add_tensor_in(__did, resid1_piece1);
                 add_tensor_ro(__did, ext_out);
                 add_scalar(__did, cur_valid);
                 add_scalar(__did, b0);
