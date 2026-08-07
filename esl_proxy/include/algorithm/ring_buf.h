@@ -43,6 +43,30 @@ extern ctrl_t g_ctrl_t[DISPATCH_THREAD_CNT];
 
 extern int g_subtask_cnt;
 
+#ifdef ENABLE_DAG_DEDUP
+/* g_ancestors[t]: bitset of every task t transitively depends on (direct
+ * or indirect), built incrementally in add_predecessors(). */
+#define ANCESTOR_WORDS (RING_SIZE / 64)
+extern uint64_t g_ancestors[RING_SIZE][ANCESTOR_WORDS];
+
+static inline bool ancestor_test(uint32_t task, uint32_t candidate)
+{
+    return (g_ancestors[task][candidate / 64] >> (candidate % 64)) & 1u;
+}
+
+static inline void ancestor_set_bit(uint32_t task, uint32_t candidate)
+{
+    g_ancestors[task][candidate / 64] |= (1ULL << (candidate % 64));
+}
+
+static inline void ancestor_union(uint32_t dst, uint32_t src)
+{
+    for (int w = 0; w < ANCESTOR_WORDS; w++) {
+        g_ancestors[dst][w] |= g_ancestors[src][w];
+    }
+}
+#endif /* ENABLE_DAG_DEDUP */
+
 struct ring_buf {
     uint32_t size;
     uint32_t* head;
@@ -111,12 +135,40 @@ static int add_predecessors(uint32_t task_id, uint32_t target[], uint32_t n, uin
     {
         if (target[i] < min_uncomplete_task)
             continue;
+
+#ifdef ENABLE_DAG_DEDUP
+        /* Skip target[i] if another candidate target[j] already has it as
+         * an ancestor -- the direct edge would be redundant. */
+        bool redundant = false;
+        for (uint32_t j = 0; j < n; j++) {
+            if (j == i)
+                continue;
+            if (ancestor_test(target[j], target[i])) {
+                redundant = true;
+                break;
+            }
+        }
+        if (redundant)
+            continue;
+#endif /* ENABLE_DAG_DEDUP */
+
         WORKER_LOGF("succeed,task_id,%u,predecessor_id,%u,idx,%d", task_id, target[i], cnt);
         uint32_t* idx = atomic_fetch_add(&g_predecessor_ring.tail, 1);
         *idx = target[i];
         cnt++;
     }
     ptr->cnt = cnt;
+
+#ifdef ENABLE_DAG_DEDUP
+    /* Record ancestors for every target[i], even skipped ones -- task_id
+     * still depends on them, and later ancestor_test() calls need the
+     * full lineage. */
+    for (uint32_t i = 0; i < n; i++) {
+        ancestor_set_bit(task_id, target[i]);
+        ancestor_union(task_id, target[i]);
+    }
+#endif /* ENABLE_DAG_DEDUP */
+
     return cnt;
 }
 
