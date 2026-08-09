@@ -32,8 +32,12 @@
 
 struct task_tensor_desc {
     uint16_t       id;          /* ring-buffer task id */
-    uint16_t       tensor_cnt;  /* number of valid data[] entries */
-    Tensor         data[16];    /* tensor addresses (Tensor handles) */
+    uint16_t       out_cnt;  /* number of valid data[] entries */
+    uint16_t       in_cnt;  /* number of valid data[] entries */
+    uint16_t       inout_cnt;  /* number of valid data[] entries */
+    Tensor         in_data[8];    /* tensor addresses (Tensor handles) */
+    Tensor         out_data[8];    /* tensor addresses (Tensor handles) */
+    Tensor         inout_data[8];    /* tensor addresses (Tensor handles) */
 };
 
 #endif /* ORCH_CONFIG_H */

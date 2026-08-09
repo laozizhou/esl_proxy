@@ -36,10 +36,10 @@ make CASE=paged_attention_unroll.h run
 make CASE=paged_attention_unroll_manual_scope.h run
 
 make -f Makefile_scheduler CASE=cases/qwen3_14b_decode_subgraph.h THREAD_CNT=2 TARGET_NAME=qwen_2c4t run
-make -f Makefile_scheduler CASE=cases/qwen3_14b_decode_total_subgraph.h THREAD_CNT=1 TARGET_NAME=qwen_1c2t run
+make -f Makefile_scheduler CASE=cases/qwen3_14b_decode_total_graph.h THREAD_CNT=1 TARGET_NAME=qwen_1c2t run
 
 make -f Makefile_scheduler CASE=cases/paged_attention_subgraph.h THREAD_CNT=2 TARGET_NAME=pa_2c4t run
-make -f Makefile_scheduler CASE=cases/paged_attention_total_subgraph.h THREAD_CNT=1 TARGET_NAME=pa_1c2t run
+make -f Makefile_scheduler CASE=cases/paged_attention_total_graph.h THREAD_CNT=1 TARGET_NAME=pa_1c2t run
 ```
 
 ### Qwen3 SPMD 档位

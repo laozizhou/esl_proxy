@@ -77,8 +77,11 @@ void init_ctrl_t(void)
         }
         memset(&g_ctrl_t[tid].completed_queue, 0, sizeof(queue_t));
         atomic_flag_clear_explicit(&g_ctrl_t[tid].completed_queue.lock, memory_order_release);
-        memset(&g_ctrl_t[tid].remote_completed_queue, 0, sizeof(queue_t));
-        atomic_flag_clear_explicit(&g_ctrl_t[tid].remote_completed_queue.lock, memory_order_release);
+        memset(g_ctrl_t[tid].remote_completed_queue.ring, 0, sizeof(g_ctrl_t[tid].remote_completed_queue.ring));
+        atomic_store_explicit(&g_ctrl_t[tid].remote_completed_queue.write_pos, 0, memory_order_release);
+        for (int p = 0; p < PAINTER_THREAD_CNT; p++) {
+            atomic_store_explicit(&g_ctrl_t[tid].remote_completed_queue.read_pos[p], 0, memory_order_release);
+        }
     }
 }
 
@@ -184,7 +187,7 @@ static inline void push_2_completed_queue(int tid)
                       g_ctrl_t[tid].task_id_map2[i]);
     }
     batch_enqueue(&g_ctrl_t[tid].completed_queue, task_id, (uint32_t)complete_cnt);
-    batch_enqueue(&g_ctrl_t[tid].remote_completed_queue, task_id, (uint32_t)complete_cnt);
+    remote_cq_write_batch(&g_ctrl_t[tid].remote_completed_queue, task_id, (uint32_t)complete_cnt);
 }
 
 static inline int send_task(ctrl_t *ctrl, int type)

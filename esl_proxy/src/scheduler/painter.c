@@ -44,7 +44,6 @@ static inline bool update_task_state(int tid, uint32_t cnt, uint32_t* cq_buf)
         return false;
     
     uint32_t task_id;
-    uint32_t idx;
 
     for (uint32_t j = 0; j < cnt; j++) {
         task_id = cq_buf[j];
@@ -67,6 +66,7 @@ static inline bool update_task_state(int tid, uint32_t cnt, uint32_t* cq_buf)
         if (completed_task_cnt >= total_task_cnt)
             atomic_store_explicit(&g_is_done, true, memory_order_release);
     }
+    return true;
 }
 
 void add_successors(int tid, uint32_t ready_cnt[], uint32_t rq_buf[][RQ_BATCH_SIZE]) {
@@ -157,13 +157,27 @@ void resolve_dep(int tid, uint32_t cnt, uint32_t* cq_buf, uint32_t rq_buf[][RQ_B
 void deal_completed_queue(int tid) {
     for (int i = 0; i < DISPATCH_THREAD_CNT; i++) {
         uint32_t cq_buf[CQ_BATCH_SIZE];
-        uint32_t cnt = CQ_BATCH_SIZE;
+        uint32_t cnt;
 
         uint32_t rq_buf[TASK_TYPE_CNT][RQ_BATCH_SIZE];
         uint32_t ready_cnt[TASK_TYPE_CNT] = {0, 0};
 
-        queue_t *cq = (tid == i) ? (&g_ctrl_t[i].completed_queue) : (&g_ctrl_t[i].remote_completed_queue);
-        batch_dequeue(cq, cq_buf, &cnt);
+        if (tid == i) {
+            /* Own completed_queue: exclusive reader, safe to batch_dequeue. */
+            cnt = CQ_BATCH_SIZE;
+            batch_dequeue(&g_ctrl_t[i].completed_queue, cq_buf, &cnt);
+        } else {
+            /* Remote completed_queue: multi-reader ring buffer.
+             * Each painter reads independently; data persists until
+             * all painters have advanced past it (write_pos - min(read_pos[])
+             * determines overwritable space). */
+            cnt = remote_cq_read_batch(&g_ctrl_t[i].remote_completed_queue, tid,
+                                       cq_buf, CQ_BATCH_SIZE);
+        }
+
+        if (cnt <= 0)
+            continue;
+
         update_task_state(tid, cnt, cq_buf);
         add_successors(tid, ready_cnt, rq_buf);
         resolve_dep(tid, cnt, cq_buf, rq_buf, ready_cnt);
@@ -195,8 +209,7 @@ void *painter(void *arg)
     uint64_t elapsed_ns = end_ns - start_ns;
     if (tid == 0)
     {
-        // WORKER_LOGF("painter,commit_tasks_cnt,%d,completed_task_cnt,%d", commit_task_id[tid], completed_task_cnt);
-        // WORKER_LOGF("painter,task_tp,%f,MTasks/s",(float)(completed_task_cnt * 1000.0 / elapsed_ns));
+        printf("scheduler_throughput,%.2f,MTasks/s\n",(float)(total_task_cnt * 1000.0 / elapsed_ns));
     }
     // WORKER_LOGF("painter,%d,done", tid);
     return NULL;

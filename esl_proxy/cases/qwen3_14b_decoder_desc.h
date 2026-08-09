@@ -50,6 +50,12 @@ static inline int qwen3_cur_blocks(int total_chunks, int base) {
     return qwen3_min_i(qwen3_blocks_per_task(total_chunks), total_chunks - base);
 }
 
+#define HASH_TABLE_SIZE 8192
+
+static inline uint32_t get_slot_idx(uint64_t addr) {
+    return (uint32_t)(addr >> (64 - __builtin_ctz(HASH_TABLE_SIZE)));
+}
+
 extern Tensor g_tensors[MAX_TENSOR_NUM];
 extern int desc_thread_count;
 extern int desc_batch_size;
@@ -161,8 +167,8 @@ int orchestrator_desc(const uint64_t orch_args, int thread_id, int *created_cnt)
         });
 
         for (int base = 0; base < 20; base += qwen3_blocks_per_task(20)) {
-            int cur_blocks = qwen3_cur_blocks(20, base);
             DESC_DO_OR_SKIP(desc_task_id, {
+                int cur_blocks = qwen3_cur_blocks(20, base);
                 Tensor q_piece = view(q_proj, (uint32_t)b0, base * 256u, 16u, cur_blocks * 256u);
                 new_task(__did, TASK_TYPE_CUBE, (uint32_t)cur_blocks, DUR_Q_PROJ);
                 add_tensor_in(__did, normed_tile);
@@ -321,8 +327,8 @@ int orchestrator_desc(const uint64_t orch_args, int thread_id, int *created_cnt)
         const int64_t cur_valid = (user_batch - b0 > 16) ? 16 : (user_batch - b0);
         for (int base = 0; base < 40; base += qwen3_blocks_per_task(40)) {
             // 40: out_proj SPMD total chunks; cols/chunk = 5120/40 = 128
-            int cur_blocks = qwen3_cur_blocks(40, base);
             DESC_DO_OR_SKIP(desc_task_id,  {
+                int cur_blocks = qwen3_cur_blocks(40, base);
                 Tensor attn_out_tile = view(attn_out[b0 / 16], 0u, 0u, (uint32_t)cur_valid, 5120u);
                 Tensor resid1_piece0 = view(resid1_tile, 0u, base * 128u, 16u, (uint32_t)(cur_blocks * 128));
                 new_task(__did, TASK_TYPE_MIX, (uint32_t)cur_blocks, DUR_OUT_PROJ);

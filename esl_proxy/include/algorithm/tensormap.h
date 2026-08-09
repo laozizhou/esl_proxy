@@ -170,8 +170,7 @@ static inline void tm_submit_ptr(uint32_t tid) {
     for (i = 0; i < g_tm_deps.pend_n; i++) {
         if (g_tm_deps.pend[i].kind & TM_PEND_IN) {
             ctx.is_inout = (g_tm_deps.pend[i].kind == TM_PEND_INOUT);
-            tm_lookup_tensor(&g_tm_deps.map, g_tm_deps.pend[i].t, tm_collect_on_match,
-                &ctx);
+            tm_lookup_tensor(&g_tm_deps.map, g_tm_deps.pend[i].t, tm_collect_on_match, &ctx);
         }
     }
     if (ctx.pn > 0) {

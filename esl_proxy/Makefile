@@ -53,7 +53,7 @@ UNAME_S  := $(shell uname -s)
 ifeq ($(UNAME_S),Linux)
     LDFLAGS  := -static -lpthread -latomic
 else
-    LDFLAGS  := -static -lpthread
+    LDFLAGS  := -lpthread
 endif
 
 # All four cases use struct Tensor / tensormap helpers.
