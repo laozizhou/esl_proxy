@@ -1,6 +1,19 @@
 #ifndef SCHEDULER_CONF_H
 #define SCHEDULER_CONF_H
 
+#include <pthread.h>
+
+/* Portable barrier for synchronizing simultaneous thread start */
+typedef struct {
+    pthread_mutex_t mutex;
+    pthread_cond_t  cond;
+    int             count;
+    int             needed;
+} barrier_t;
+
+void barrier_wait(barrier_t *b);
+extern barrier_t g_start_barrier;
+
 #define RING_SIZE 2048
 #define RING_MASK (RING_SIZE - 1)
 #define HALF_RING_SIZE 1024

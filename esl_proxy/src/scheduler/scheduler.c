@@ -23,9 +23,34 @@ uint64_t get_time_ns(void)
     return (uint64_t)ts.tv_sec * 1000000000ULL + ts.tv_nsec;
 }
 
+void barrier_init(barrier_t *b, int needed) {
+    pthread_mutex_init(&b->mutex, NULL);
+    pthread_cond_init(&b->cond, NULL);
+    b->count = 0;
+    b->needed = needed;
+}
+
+void barrier_wait(barrier_t *b) {
+    pthread_mutex_lock(&b->mutex);
+    b->count++;
+    if (b->count == b->needed) {
+        pthread_cond_broadcast(&b->cond);
+        b->count = 0;  /* reset for potential reuse */
+    } else {
+        pthread_cond_wait(&b->cond, &b->mutex);
+    }
+    pthread_mutex_unlock(&b->mutex);
+}
+
+void barrier_destroy(barrier_t *b) {
+    pthread_mutex_destroy(&b->mutex);
+    pthread_cond_destroy(&b->cond);
+}
+
 /* Global variable definitions needed by dispatch.c and painter.c */
 atomic_bool g_is_done = false;
 atomic_int g_min_uncomplete_task = 0;
+barrier_t g_start_barrier;
 
 #define TASK_EXEC_RECORDS_MAX 8192
 
@@ -73,6 +98,11 @@ int main(void) {
     signal(SIGINT, handle_signal);
     signal(SIGTERM, handle_signal);
 
+    /* Barrier: main + all painter + all dispatch threads wait here,
+     * then all are released simultaneously. */
+    int total_threads = PAINTER_THREAD_CNT + DISPATCH_THREAD_CNT + 1;
+    barrier_init(&g_start_barrier, total_threads);
+
     for (int i = 0; i < PAINTER_THREAD_CNT; i++) {
         pthread_create(&painter_threads[i], NULL, painter, (void *)(intptr_t)i);
 #ifdef __linux__
@@ -92,6 +122,10 @@ int main(void) {
         pthread_setaffinity_np(dispatch_threads[i], sizeof(cpu_set_t), &mask);
 #endif
     }
+
+    /* Release all threads to start simultaneously */
+    barrier_wait(&g_start_barrier);
+    barrier_destroy(&g_start_barrier);
 
     for (int i = 0; i < PAINTER_THREAD_CNT; i++) {
         pthread_join(painter_threads[i], NULL);

@@ -282,13 +282,16 @@ void *dispatch_worker(void *arg)
 {
     int tid = (int)(intptr_t)arg;
     int total_sent = 0;
-    // WORKER_LOGF("dispatch,%d,start", tid);
 
     for (size_t i = 0; i < EXE_TYPE_CNT; i++)
     {        
         hand_shake(tid, g_ctrl_t[tid].aicore_spr_1[i], i, 0);
         hand_shake(tid, g_ctrl_t[tid].aicore_spr_2[i], i, 64);
     }
+
+    /* Wait for painter threads to also be ready, then start simultaneously */
+    barrier_wait(&g_start_barrier);
+    // WORKER_LOGF("dispatch,%d,start", tid);
 
     // atomic_store_explicit(&g_is_done, true, memory_order_release);
     // return NULL;
