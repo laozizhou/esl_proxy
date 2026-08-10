@@ -163,9 +163,8 @@ void deal_completed_queue(int tid) {
         uint32_t ready_cnt[TASK_TYPE_CNT] = {0, 0};
 
         if (tid == i) {
-            /* Own completed_queue: exclusive reader, safe to batch_dequeue. */
-            cnt = CQ_BATCH_SIZE;
-            batch_dequeue(&g_ctrl_t[i].completed_queue, cq_buf, &cnt);
+            /* Own completed_queue: exclusive reader, lock-free SPSC dequeue. */
+            cnt = batch_dequeue_spsc(&g_ctrl_t[i].completed_queue, cq_buf, CQ_BATCH_SIZE);
         } else {
             /* Remote completed_queue: multi-reader ring buffer.
              * Each painter reads independently; data persists until
