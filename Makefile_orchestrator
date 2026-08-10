@@ -1,55 +1,49 @@
-# Makefile for orchestrator.c standalone compilation and execution
+# Orchestrator: alloc → desc → detect
 #
-# Usage:
-#   make -f Makefile_orchestrator        # compile
-#   make -f Makefile_orchestrator run    # compile and run
+#   make -f Makefile_orchestrator
+#   make -f Makefile_orchestrator run ARGS="4 4"
+#   Baseline (no tickets):
+#     make -f Makefile_orchestrator clean all EXTRA_CFLAGS="-DORCH_USE_INSERT_TICKETS=0"
+#   Optimized (default):
+#     make -f Makefile_orchestrator clean all
 
 CC       := cc
 CFLAGS   := -g -std=c11 -Wall -Wextra -pedantic -O2 -D_POSIX_C_SOURCE=199309L \
             -I esl_proxy/include/algorithm -I esl_proxy/cases \
             -MMD -MP -Wno-error=implicit-function-declaration
 
-# -latomic is needed on Linux but not on macOS (clang)
+ifneq ($(EXTRA_CFLAGS),)
+CFLAGS   += $(EXTRA_CFLAGS)
+endif
+
 UNAME_S  := $(shell uname -s)
 ifeq ($(UNAME_S),Linux)
-    LDFLAGS := -static -lpthread -latomic
+    LDFLAGS := -lpthread -latomic
 else
-    LDFLAGS := -static -lpthread
+    LDFLAGS := -lpthread
 endif
 
 OBJ_DIR  := build/orchestrator
 TARGET   := bin/orchestrator
-TARGET_AP := bin/orchestrator_ap
 
 SRCS := \
     esl_proxy/src/orchestrator/orchestrator.c \
     esl_proxy/src/orchestrator/orc_alloc.c \
     esl_proxy/src/orchestrator/orc_desc.c \
-    esl_proxy/src/algorithm/log.c \
-    esl_proxy/src/algorithm/shm.c
-
-SRCS_AP := \
-    esl_proxy/src/orchestrator/orchestrator.c \
-    esl_proxy/src/orchestrator/orc_alloc.c \
-    esl_proxy/src/orchestrator/orc_desc_ap.c \
+    esl_proxy/src/orchestrator/orc_detect.c \
     esl_proxy/src/algorithm/log.c \
     esl_proxy/src/algorithm/shm.c
 
 OBJS := $(patsubst esl_proxy/src/%.c,$(OBJ_DIR)/%.o,$(SRCS))
-OBJS_AP := $(patsubst esl_proxy/src/%.c,$(OBJ_DIR)/%.o,$(SRCS_AP))
-DEPS := $(OBJS:.o=.d) $(OBJS_AP:.o=.d)
+DEPS := $(OBJS:.o=.d)
+ARGS ?=
 
-.PHONY: all ap run run-ap clean
+.PHONY: all run clean
 
 all: $(TARGET)
 
-ap: $(TARGET_AP)
-
 $(TARGET): $(OBJS) | bin
 	$(CC) $(CFLAGS) $(OBJS) -o $@ $(LDFLAGS)
-
-$(TARGET_AP): $(OBJS_AP) | bin
-	$(CC) $(CFLAGS) $(OBJS_AP) -o $@ $(LDFLAGS)
 
 $(OBJ_DIR)/%.o: esl_proxy/src/%.c
 	@mkdir -p $(dir $@)
@@ -59,12 +53,9 @@ $(OBJ_DIR) bin:
 	mkdir -p $@
 
 run: all
-	./$(TARGET)
-
-run-ap: ap
-	./$(TARGET_AP)
+	./$(TARGET) $(ARGS)
 
 clean:
-	rm -rf $(OBJ_DIR) $(TARGET) $(TARGET_AP)
+	rm -rf $(OBJ_DIR) $(TARGET)
 
 -include $(DEPS)

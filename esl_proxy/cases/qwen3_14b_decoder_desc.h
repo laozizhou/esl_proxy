@@ -9,11 +9,42 @@
 //
 // Durations are V200-benchmark per-subtask means (README.md §1.2.1 AICore View)
 // in ns.
+//
+// --- Insert-ticket 前移（本文件内联；不动 tensormap_core）---
+// 目标：把 insert 中可并行的前缀 tm_copy_tensor_to_entry 挪到 describe；
+// detect 仍用现有 API：tm_new_entry + memcpy(预填 TmEntry) + tm_link_entry
+//（bucket/hash 仍由 tm_link_entry 计算）+ lookup + add_predecessors。
+//   ORCH_USE_INSERT_TICKETS=1（默认）：add_tensor_out/inout 预填 TmEntry。
+//   ORCH_USE_INSERT_TICKETS=0：不填票，detect 走 tm_insert_tensor（基线）。
+// detect 若只需票类型：先 #define QWEN3_DESC_TYPES_ONLY 再 include 本文件。
 #include <stddef.h>
 #include <stdint.h>
 
 #include "mem_pool.h"
-#include "orch_config.h"
+#include "orch_config.h" /* ORCH_USE_INSERT_TICKETS / RING_SIZE / ORCH_IO_MAX */
+#include "tensormap_core.h"
+
+/* 单条 out/inout 预填的 TmEntry；link 字段由 detect 的 tm_link_entry 覆盖。 */
+struct tm_insert_ticket {
+    TmEntry entry;
+};
+
+/* 与 g_task_tensor_buf 同环下标：每个 task 的 out/inout 票。 */
+struct task_insert_tickets {
+    uint16_t out_cnt;
+    uint16_t inout_cnt;
+    struct tm_insert_ticket out[ORCH_IO_MAX];
+    struct tm_insert_ticket inout[ORCH_IO_MAX];
+};
+
+/* describe 热路径：只做 tensor→entry 拷贝（可并行）；不算 hash、不挂链。 */
+static inline void tm_fill_insert_ticket(struct tm_insert_ticket *tk,
+    const Tensor *t)
+{
+    tm_copy_tensor_to_entry(t, &tk->entry);
+}
+
+#ifndef QWEN3_DESC_TYPES_ONLY
 
 #define DUR_RMSNORM 23950
 #define DUR_Q_PROJ 26060
@@ -35,6 +66,9 @@
 
 int g_subtask_cnt = 0;
 struct task_tensor_desc g_task_tensor_buf[RING_SIZE];
+#if ORCH_USE_INSERT_TICKETS
+struct task_insert_tickets g_insert_tickets[RING_SIZE];
+#endif
 
 static inline int qwen3_min_i(int a, int b) {
     return a < b ? a : b;
@@ -79,6 +113,11 @@ static inline void add_tensor_out(uint16_t task_id, Tensor t)
 
     int idx2 = g_task_tensor_buf[ring_idx].out_cnt++;
     g_task_tensor_buf[ring_idx].out_data[idx2] = t;
+#if ORCH_USE_INSERT_TICKETS
+    /* 并行 stripe 上预填 TmEntry，detect 侧跳过 tm_copy_tensor_to_entry。 */
+    tm_fill_insert_ticket(&g_insert_tickets[ring_idx].out[idx2], &t);
+    g_insert_tickets[ring_idx].out_cnt = (uint16_t)(idx2 + 1);
+#endif
 }
 
 static inline void add_tensor_in(uint16_t task_id, Tensor t)
@@ -99,6 +138,11 @@ static inline void add_tensor_inout(uint16_t task_id, Tensor t)
 
     int idx2 = g_task_tensor_buf[ring_idx].inout_cnt++;
     g_task_tensor_buf[ring_idx].inout_data[idx2] = t;
+#if ORCH_USE_INSERT_TICKETS
+    /* 同 out：inout 也要进 map，故同样填票。 */
+    tm_fill_insert_ticket(&g_insert_tickets[ring_idx].inout[idx2], &t);
+    g_insert_tickets[ring_idx].inout_cnt = (uint16_t)(idx2 + 1);
+#endif
 }
 
 /* Helper: if the current thread owns task_id, call the body macro with
@@ -405,3 +449,5 @@ int orchestrator_desc(const uint64_t orch_args, int thread_id, int *created_cnt)
     *created_cnt = desc_created_cnt;
     return desc_task_id;
 }
+
+#endif /* !QWEN3_DESC_TYPES_ONLY */

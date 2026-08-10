@@ -1,10 +1,18 @@
 #ifndef ALGORITHM_CONF_H
 #define ALGORITHM_CONF_H
 
+#ifndef RING_SIZE
 #define RING_SIZE 4096
+#endif
+#ifndef RING_MASK
 #define RING_MASK (RING_SIZE - 1)
-#define HALF_RING_SIZE 2048
-#define NODE_BUFF_SIZE 8192
+#endif
+#ifndef HALF_RING_SIZE
+#define HALF_RING_SIZE (RING_SIZE / 2)
+#endif
+#ifndef NODE_BUFF_SIZE
+#define NODE_BUFF_SIZE 65536
+#endif
 
 // TODO: ERROR
 #define CON_NODE_CNT 32
