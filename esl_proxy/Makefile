@@ -72,7 +72,7 @@ CFLAGS   += $(EXTRA_CFLAGS)
 endif
 
 # Early-dispatch compile switch (Step 1+)
-ED_ENABLE ?= 1
+ED_ENABLE ?= 0
 ED_UNFIN_THRESHOLD ?= 0xFFFF
 # 进入 ED 的最大 block 数。默认 1 = 只接非 SPMD 任务；放开的实测代价见 conf.h 说明。
 ED_SPMD_MAX_BLOCKS ?= 1

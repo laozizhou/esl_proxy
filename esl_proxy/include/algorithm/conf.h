@@ -90,7 +90,7 @@
 
 /* 1: enable early-dispatch; 0: disable (baseline). Override: make ED_ENABLE=0/1 */
 #ifndef ED_ENABLE
-#define ED_ENABLE 1
+#define ED_ENABLE 0
 #endif
 
 /*
