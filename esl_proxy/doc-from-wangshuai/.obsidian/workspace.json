@@ -1,0 +1,192 @@
+{
+  "main": {
+    "id": "fdfe467914e157a4",
+    "type": "split",
+    "children": [
+      {
+        "id": "3525bc76a40a6267",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "e4b8a5dedf97aa35",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "early-dispatch机制设计.md",
+                "mode": "source",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "early-dispatch机制设计"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "vertical"
+  },
+  "left": {
+    "id": "a0281fcef46d7eff",
+    "type": "split",
+    "children": [
+      {
+        "id": "be1b2503832ab48b",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "585540921ddf5c54",
+            "type": "leaf",
+            "state": {
+              "type": "file-explorer",
+              "state": {
+                "sortOrder": "alphabetical",
+                "autoReveal": false
+              },
+              "icon": "lucide-folder-closed",
+              "title": "文件列表"
+            }
+          },
+          {
+            "id": "333a824753cb3c48",
+            "type": "leaf",
+            "state": {
+              "type": "search",
+              "state": {
+                "query": "",
+                "matchingCase": false,
+                "explainSearch": false,
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical"
+              },
+              "icon": "lucide-search",
+              "title": "搜索"
+            }
+          },
+          {
+            "id": "f91cb2ff22f77238",
+            "type": "leaf",
+            "state": {
+              "type": "bookmarks",
+              "state": {},
+              "icon": "lucide-bookmark",
+              "title": "书签"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300
+  },
+  "right": {
+    "id": "9c8d90b56018e6f5",
+    "type": "split",
+    "children": [
+      {
+        "id": "19dbb5b64df86225",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "3317392390308a5c",
+            "type": "leaf",
+            "state": {
+              "type": "backlink",
+              "state": {
+                "file": "early-dispatch机制设计.md",
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical",
+                "showSearch": false,
+                "searchQuery": "",
+                "backlinkCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-coming-in",
+              "title": "early-dispatch机制设计 的反向链接列表"
+            }
+          },
+          {
+            "id": "838b1cdc0fc2d6d1",
+            "type": "leaf",
+            "state": {
+              "type": "outgoing-link",
+              "state": {
+                "file": "early-dispatch机制设计.md",
+                "linksCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-going-out",
+              "title": "early-dispatch机制设计 的出链列表"
+            }
+          },
+          {
+            "id": "8c56a45e7fe84121",
+            "type": "leaf",
+            "state": {
+              "type": "tag",
+              "state": {
+                "sortOrder": "frequency",
+                "useHierarchy": true,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-tags",
+              "title": "标签"
+            }
+          },
+          {
+            "id": "c5e042cfa49d55d0",
+            "type": "leaf",
+            "state": {
+              "type": "all-properties",
+              "state": {
+                "sortOrder": "frequency",
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-archive",
+              "title": "添加笔记属性"
+            }
+          },
+          {
+            "id": "c880f9fc17c26ea2",
+            "type": "leaf",
+            "state": {
+              "type": "outline",
+              "state": {
+                "file": "early-dispatch机制设计.md",
+                "followCursor": false,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-list",
+              "title": "early-dispatch机制设计 的大纲"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300,
+    "collapsed": true
+  },
+  "left-ribbon": {
+    "hiddenItems": {
+      "switcher:打开快速切换": false,
+      "graph:查看关系图谱": false,
+      "canvas:新建白板": false,
+      "daily-notes:打开/创建今天的日记": false,
+      "templates:插入模板": false,
+      "command-palette:打开命令面板": false,
+      "bases:新建数据库": false
+    }
+  },
+  "active": "e4b8a5dedf97aa35",
+  "lastOpenFiles": [
+    "early-dispatch一期开发方案.md",
+    "early-dispatch设计方案.md",
+    "early-dispatch机制设计_副本.md"
+  ]
+}

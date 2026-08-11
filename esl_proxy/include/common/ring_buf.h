@@ -106,8 +106,13 @@ static int add_predecessors(uint32_t task_id, uint32_t target[], uint32_t n, uin
         if (target[i] < min_uncomplete_task)
             continue;
         WORKER_LOGF("succeed,task_id,%u,predecessor_id,%u,idx,%d", task_id, target[i], cnt);
-        uint32_t* idx = atomic_fetch_add(&g_predecessor_ring.tail, 1);
-        *idx = target[i];
+        /* 见 algorithm/ring_buf.h：原子指针 fetch_add(+1) 按字节推进，必须用 CAS 做元素级 +1 */
+        uint32_t *slot = atomic_load_explicit(&g_predecessor_ring.tail, memory_order_relaxed);
+        while (!atomic_compare_exchange_weak_explicit(
+                   &g_predecessor_ring.tail, &slot, slot + 1,
+                   memory_order_acq_rel, memory_order_relaxed)) {
+        }
+        *slot = target[i];
         cnt++;
     }
     ptr->cnt = cnt;
