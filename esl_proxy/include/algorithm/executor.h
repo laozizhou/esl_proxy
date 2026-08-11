@@ -34,8 +34,8 @@ typedef enum {
 typedef struct executor {
     /* 当前正在执行的 slot；AIC_OSTD 表示该 core 空闲。 */
     uint8_t idx;
-    uint16_t tasks[AIC_OSTD];
-    uint16_t block_idx[AIC_OSTD];
+    uint32_t tasks[AIC_OSTD];
+    uint32_t block_idx[AIC_OSTD];
     uint32_t duration[AIC_OSTD];
     uint64_t base[AIC_OSTD];
     /* 跨线程 payload 发布边界；ED_ENABLE=0 时 normal dispatch 也依赖此字段 */

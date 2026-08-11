@@ -8,7 +8,7 @@ LOG_DIR="${LOG_DIR:-log/a12_$(date +%Y%m%d_%H%M%S)}"
 mkdir -p "$LOG_DIR"
 
 # 场景 1: 常规图验证 fanin 汇总等式
-A12_CASE="${A12_CASE:-qwen3_dynamic_tensormap_ot1.h}"
+A12_CASE="${A12_CASE:-qwen3_dynamic_tensormap.h}"
 make -s clean >/dev/null 2>&1
 if ! make -s all CASE="$A12_CASE" ED_ENABLE=1 EXTRA_CFLAGS="-DED_HOOK0_CONTRIB_STATS=1" >/dev/null 2>&1; then
     A12_CASE="qwen3_dynamic_tensormap.h"

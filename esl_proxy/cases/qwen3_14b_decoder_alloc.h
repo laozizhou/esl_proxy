@@ -11,20 +11,38 @@
 // in ns.
 #include <stddef.h>
 #include <stdint.h>
-
+#include <stdio.h>
+#include <time.h>
 
 #include "mem_pool.h"
+#include "orch_config.h"
 #include "tensormap.h"
 
-#define MAX_TENSOR_NUM 4096
 Tensor g_tensors[MAX_TENSOR_NUM];
 
-#ifndef QWEN3_SPMD_TIER
-#define QWEN3_SPMD_TIER 4
-#endif
-#if QWEN3_SPMD_TIER < 0 || QWEN3_SPMD_TIER > 4
-#error "QWEN3_SPMD_TIER must be 0..4"
-#endif
+// Shared external tensors (initialized once by orchestrator_alloc, used by all desc threads)
+Tensor ext_hidden_states;
+Tensor ext_input_rms_weight;
+Tensor ext_wq;
+Tensor ext_wk;
+Tensor ext_wv;
+Tensor ext_q_norm_weight;
+Tensor ext_k_norm_weight;
+Tensor ext_seq_lens;
+Tensor ext_block_table;
+Tensor ext_slot_mapping;
+Tensor ext_rope_cos;
+Tensor ext_rope_sin;
+Tensor ext_k_cache;
+Tensor ext_v_cache;
+Tensor ext_wo;
+Tensor ext_post_rms_weight;
+Tensor ext_w_gate;
+Tensor ext_w_up;
+Tensor ext_w_down;
+Tensor ext_out;
+
+static uint32_t alloc_task_id = 0;
 
 static inline int qwen3_min_i(int a, int b) {
     return a < b ? a : b;
@@ -49,7 +67,31 @@ static inline int alloc_tensors_v2(uint32_t shape[], int dim, int bytes)
     return (g_tensor_index - 1);
 }
 
-void aicpu_orchestration_entry(const uint64_t orch_args) {
+void orchestrator_alloc(const uint64_t orch_args) {
+    uint64_t t_start = get_time_ns();
+
+    // Initialize shared external tensors
+    ext_hidden_states = tensor_from_base_layout(orch_args + 0, (uint32_t[]){90, 5120}, 2, BFLOAT16); // batch=90, hidden=5120
+    ext_input_rms_weight = tensor_from_base_layout(orch_args + 1, (uint32_t[]){1, 5120}, 2, FLOAT32); // hidden=5120
+    ext_wq = tensor_from_base_layout(orch_args + 2, (uint32_t[]){5120, 5120}, 2, BFLOAT16); // hidden=5120
+    ext_wk = tensor_from_base_layout(orch_args + 3, (uint32_t[]){5120, 1024}, 2, BFLOAT16); // hidden=5120, kv_hidden=1024
+    ext_wv = tensor_from_base_layout(orch_args + 4, (uint32_t[]){5120, 1024}, 2, BFLOAT16); // hidden=5120, kv_hidden=1024
+    ext_q_norm_weight = tensor_from_base_layout(orch_args + 5, (uint32_t[]){1, 128}, 2, FLOAT32); // head_dim=128
+    ext_k_norm_weight = tensor_from_base_layout(orch_args + 6, (uint32_t[]){1, 128}, 2, FLOAT32); // head_dim=128
+    ext_seq_lens = tensor_from_base_layout(orch_args + 7, (uint32_t[]){90}, 1, INT32); // batch=90
+    ext_block_table = tensor_from_base_layout(orch_args + 8, (uint32_t[]){2880}, 1, INT32); // num_blocks=2880
+    ext_slot_mapping = tensor_from_base_layout(orch_args + 9, (uint32_t[]){90}, 1, INT32); // batch=90
+    ext_rope_cos = tensor_from_base_layout(orch_args + 10, (uint32_t[]){4096, 128}, 2, FLOAT32); // max_seq=4096, head_dim=128
+    ext_rope_sin = tensor_from_base_layout(orch_args + 11, (uint32_t[]){4096, 128}, 2, FLOAT32); // max_seq=4096, head_dim=128
+    ext_k_cache = tensor_from_base_layout(orch_args + 12, (uint32_t[]){2949120, 128}, 2, BFLOAT16); // cache_rows=2880*8*128, head_dim=128
+    ext_v_cache = tensor_from_base_layout(orch_args + 13, (uint32_t[]){2949120, 128}, 2, BFLOAT16); // cache_rows=2880*8*128, head_dim=128
+    ext_wo = tensor_from_base_layout(orch_args + 14, (uint32_t[]){5120, 5120}, 2, BFLOAT16); // hidden=5120
+    ext_post_rms_weight = tensor_from_base_layout(orch_args + 15, (uint32_t[]){1, 5120}, 2, FLOAT32); // hidden=5120
+    ext_w_gate = tensor_from_base_layout(orch_args + 16, (uint32_t[]){5120, 17408}, 2, BFLOAT16); // hidden=5120, intermediate=17408
+    ext_w_up = tensor_from_base_layout(orch_args + 17, (uint32_t[]){5120, 17408}, 2, BFLOAT16); // hidden=5120, intermediate=17408
+    ext_w_down = tensor_from_base_layout(orch_args + 18, (uint32_t[]){17408, 5120}, 2, BFLOAT16); // intermediate=17408, hidden=5120
+    ext_out = tensor_from_base_layout(orch_args + 19, (uint32_t[]){90, 5120}, 2, BFLOAT16); // batch=90, hidden=5120
+
     const int64_t user_batch = 90; 
     const int64_t batch_padded = 96;
     int t0 = alloc_tensors_v2((uint32_t[2]){batch_padded, 5120}, 2, FLOAT32);
@@ -60,16 +102,16 @@ void aicpu_orchestration_entry(const uint64_t orch_args) {
     int k_proj_norm = alloc_tensors_v2((uint32_t[2]){batch_padded, 1024}, 2, FLOAT32);
     for (int64_t b0 = 0; b0 < batch_padded; b0 += 16) {
         int t5 = alloc_tensors_v2((uint32_t[2]){16, 5120}, 2, BFLOAT16);
-        g_task_id++;
+        alloc_task_id++;
         for (int base = 0; base < 20; base += qwen3_blocks_per_task(20)) {
-            g_task_id++;
+            alloc_task_id++;
         }
 
         for (int base = 0; base < 8; base += qwen3_blocks_per_task(8)) {
-            g_task_id++;
-            g_task_id++;
+            alloc_task_id++;
+            alloc_task_id++;
         }
-        g_task_id++;
+        alloc_task_id++;
     }
     int attn_out[6];
     for (int i = 0; i < 6; i++) {
@@ -84,13 +126,13 @@ void aicpu_orchestration_entry(const uint64_t orch_args) {
         int q_padded_local = alloc_tensors_v2((uint32_t[2]){128, 128}, 2, BFLOAT16);
         int k_cache_update = alloc_tensors_v2((uint32_t[2]){8, 128}, 2, BFLOAT16); // ROPE KV write-back
         int v_cache_update = alloc_tensors_v2((uint32_t[2]){8, 128}, 2, BFLOAT16); // ROPE KV write-back
-        g_task_id++;
+        alloc_task_id++;
 
         for (int base = 0; base < 4; base += qwen3_blocks_per_task(4)) {
-            g_task_id++;
-            g_task_id++;
-            g_task_id++;
-            g_task_id++;
+            alloc_task_id++;
+            alloc_task_id++;
+            alloc_task_id++;
+            alloc_task_id++;
         }
     }
 
@@ -103,19 +145,24 @@ void aicpu_orchestration_entry(const uint64_t orch_args) {
         int up_tile = alloc_tensors_v2((uint32_t[2]){16, 17408}, 2, FLOAT32);
         int down_tile = alloc_tensors_v2((uint32_t[2]){16, 5120}, 2, FLOAT32);
         for (int base = 0; base < 40; base += qwen3_blocks_per_task(40)) {
-            g_task_id++;
+            alloc_task_id++;
         }
-        g_task_id++;
+        alloc_task_id++;
 
         for (int base = 0; base < 34; base += qwen3_blocks_per_task(34)) {
-            g_task_id++;
-            g_task_id++;
-            g_task_id++;
+            alloc_task_id++;
+            alloc_task_id++;
+            alloc_task_id++;
         }
         
         for (int base = 0; base < 40; base += qwen3_blocks_per_task(40)) {
-            g_task_id++;
-            g_task_id++;
+            alloc_task_id++;
+            alloc_task_id++;
         }
     }
+    uint64_t t_end = get_time_ns();
+    double elapsed_s = (double)(t_end - t_start) / 1e9;
+    double throughput = (double)alloc_task_id / elapsed_s / 1e6;
+    fprintf(stderr, "orchestrator_alloc throughput: %.3f MTasks/s (tasks=%u, time=%.6f s)\n",
+            throughput, alloc_task_id, elapsed_s);
 }

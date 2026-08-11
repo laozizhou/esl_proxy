@@ -42,12 +42,12 @@
 extern atomic_int g_completed_cnt;
 extern atomic_bool g_is_done;
 extern atomic_bool g_orch_is_done;
-extern uint16_t g_predecessor_cnt[RING_SIZE];
+extern uint32_t g_predecessor_cnt[RING_SIZE];
 extern task_state *g_state_buf;
 
 int dispatch(int tid);
-void resolve_dep(uint16_t cnt, uint16_t *cq_buf, uint16_t rq_buf[][RQ_BATCH_SIZE],
-                 uint16_t *ready_cnt);
+void resolve_dep(uint32_t cnt, uint32_t *cq_buf, uint32_t rq_buf[][RQ_BATCH_SIZE],
+                 uint32_t *ready_cnt);
 
 #if WORKER_LOG
 extern int g_worker_log;
@@ -288,9 +288,9 @@ static void test_ed_spmd_full_run_completes_exactly_once(void)
     g_successor_buf[p_idx].node[0] = s_id;
     g_predecessor_cnt[s_idx] = 1;
 
-    uint16_t rq_buf[2][RQ_BATCH_SIZE] = {{0}};
-    uint16_t ready_cnt[2] = {0, 0};
-    uint16_t cq[1] = {p_id};
+    uint32_t rq_buf[2][RQ_BATCH_SIZE] = {{0}};
+    uint32_t ready_cnt[2] = {0, 0};
+    uint32_t cq[1] = {p_id};
     resolve_dep(1, cq, rq_buf, ready_cnt);
 
     expect_u16((uint16_t)atomic_load_explicit(&g_executors[type][core].doorbell[slot],
@@ -396,7 +396,7 @@ static void test_ed_fanin_propagates_to_spmd_successor(void)
                (uint16_t)ED_SPEC_STAGING,
                "hook0: SPMD successor should enter STAGING once fanin meets target");
 
-    uint16_t queued = 0;
+    uint32_t queued = 0;
     expect_true(dequeue(&g_ed_ready_queue, &queued),
                 "hook0: SPMD successor should be queued for try_early_dispatch");
     expect_u16(queued, s_id, "hook0: queued id should be the SPMD successor");

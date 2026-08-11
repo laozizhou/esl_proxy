@@ -11,10 +11,10 @@
 #include "ring_buf.h"
 
 /* cutter.c 内部符号，测试里显式声明。 */
-extern uint16_t g_commit_task_id;
-extern uint16_t g_predecessor_cnt[RING_SIZE];
+extern uint32_t g_commit_task_id;
+extern uint32_t g_predecessor_cnt[RING_SIZE];
 extern task_state *g_state_buf;
-void add_successors(uint16_t ready_cnt[], uint16_t rq_buf[][RQ_BATCH_SIZE]);
+void add_successors(uint32_t ready_cnt[], uint32_t rq_buf[][RQ_BATCH_SIZE]);
 
 static int g_failures;
 
@@ -70,7 +70,7 @@ static void test_step4_hook0_contributes_after_append(void)
     const uint16_t s_full = 2;
     const uint16_t p_idx = (uint16_t)(p_full & RING_MASK);
     const uint16_t s_idx = (uint16_t)(s_full & RING_MASK);
-    static uint16_t preds[1];
+    static uint32_t preds[1];
 
     preds[0] = p_full;
     g_basic_buf[s_idx].type = TASK_TYPE_CUBE;
@@ -85,8 +85,8 @@ static void test_step4_hook0_contributes_after_append(void)
     g_commit_task_id = s_full;
     atomic_store_explicit(&g_task_id, s_full + 1, memory_order_release);
 
-    uint16_t ready_cnt[2] = {0, 0};
-    uint16_t rq_buf[2][RQ_BATCH_SIZE] = {{0}};
+    uint32_t ready_cnt[2] = {0, 0};
+    uint32_t rq_buf[2][RQ_BATCH_SIZE] = {{0}};
     add_successors(ready_cnt, rq_buf);
 
     expect_u16(g_successor_buf[p_idx].cnt, 1,
@@ -123,7 +123,7 @@ static void test_step4_late_arrival_contributes_in_add_successors(void)
     const uint16_t s_full = 6;
     const uint16_t p_idx = (uint16_t)(p_full & RING_MASK);
     const uint16_t s_idx = (uint16_t)(s_full & RING_MASK);
-    static uint16_t preds[1];
+    static uint32_t preds[1];
 
     preds[0] = p_full;
     g_basic_buf[s_idx].type = TASK_TYPE_CUBE;
@@ -138,8 +138,8 @@ static void test_step4_late_arrival_contributes_in_add_successors(void)
     g_commit_task_id = s_full;
     atomic_store_explicit(&g_task_id, s_full + 1, memory_order_release);
 
-    uint16_t ready_cnt[2] = {0, 0};
-    uint16_t rq_buf[2][RQ_BATCH_SIZE] = {{0}};
+    uint32_t ready_cnt[2] = {0, 0};
+    uint32_t rq_buf[2][RQ_BATCH_SIZE] = {{0}};
     add_successors(ready_cnt, rq_buf);
 
     expect_u16(g_successor_buf[p_idx].cnt, 1,

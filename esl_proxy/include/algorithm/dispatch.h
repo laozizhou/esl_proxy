@@ -36,12 +36,12 @@ typedef struct ctrl {
      * drain 时用它把 msg_bitmap 的 done 位还原成 task_id。
      * slot 放在最外维，因此 task_id_map[s] 整体就是「slot s 的那张表」。
      */
-    uint16_t task_id_map[AIC_OSTD][EXE_TYPE_CNT][AIC_CNT];
+    uint32_t task_id_map[AIC_OSTD][EXE_TYPE_CNT][AIC_CNT];
 
     queue_t  ready_queue[TASK_TYPE_CNT];
     queue_t  completed_queue;
     queue_t  remote_completed_queue;
-    uint16_t tid;
+    uint32_t tid;
 } ctrl_t;
 
 void *dispatch_worker(void *arg);

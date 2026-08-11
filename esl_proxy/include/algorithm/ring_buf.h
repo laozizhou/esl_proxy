@@ -25,6 +25,12 @@
 
 #include "tensor.h"
 
+struct node_list {
+    uint32_t cnt;
+    uint32_t node[CON_NODE_CNT];
+    struct node_list* next;
+};
+
 extern atomic_int g_task_id;
 extern atomic_int g_min_uncomplete_task;
 extern atomic_flag g_lock_buf[RING_SIZE];
@@ -40,11 +46,35 @@ extern int g_subtask_cnt;
 void init_predecessors(void);
 uint32_t ring_min_uncompleted(void);
 
+#ifdef ENABLE_DAG_DEDUP
+/* g_ancestors[t]: bitset of every task t transitively depends on (direct
+ * or indirect), built incrementally in add_predecessors(). */
+#define ANCESTOR_WORDS (RING_SIZE / 64)
+extern uint64_t g_ancestors[RING_SIZE][ANCESTOR_WORDS];
+
+static inline bool ancestor_test(uint32_t task, uint32_t candidate)
+{
+    return (g_ancestors[task][candidate / 64] >> (candidate % 64)) & 1u;
+}
+
+static inline void ancestor_set_bit(uint32_t task, uint32_t candidate)
+{
+    g_ancestors[task][candidate / 64] |= (1ULL << (candidate % 64));
+}
+
+static inline void ancestor_union(uint32_t dst, uint32_t src)
+{
+    for (int w = 0; w < ANCESTOR_WORDS; w++) {
+        g_ancestors[dst][w] |= g_ancestors[src][w];
+    }
+}
+#endif /* ENABLE_DAG_DEDUP */
+
 struct ring_buf {
-    uint16_t size;
-    uint16_t* head;
-    uint16_t* _Atomic start;
-    uint16_t* _Atomic tail;
+    uint32_t size;
+    uint32_t* head;
+    uint32_t* _Atomic start;
+    uint32_t* _Atomic tail;
 };
 
 static inline void ring_buf_init(void)
@@ -52,7 +82,7 @@ static inline void ring_buf_init(void)
     for (size_t i = 0; i < RING_SIZE; i++) {
         g_successor_buf[i].next = NULL;
     }
-    g_predecessor_ring.head = malloc(sizeof(uint16_t) * NODE_BUFF_SIZE);
+    g_predecessor_ring.head = malloc(sizeof(uint32_t) * NODE_BUFF_SIZE);
     atomic_store(&g_predecessor_ring.tail, g_predecessor_ring.head);
     atomic_store(&g_predecessor_ring.start, g_predecessor_ring.head);
 }
@@ -63,7 +93,7 @@ static inline void ring_buf_init(void)
  * here; the dependency direction (when needed) is tracked by the tensormap
  * layer, not the ring buffer. The distinct add_input/output/inout spellings are
  * kept only for call-site readability. */
-static inline void add_tensor_addr(uint16_t task_id, uint64_t addr)
+static inline void add_tensor_addr(uint32_t task_id, uint64_t addr)
 {
     int idx = g_basic_buf[task_id & RING_MASK].tensor_cnt++;
     g_basic_buf[task_id & RING_MASK].data[idx] = addr;
@@ -76,7 +106,7 @@ static inline void add_tensor_addr(uint16_t task_id, uint64_t addr)
 #define add_output(task_id, t) add_tensor_addr((task_id), (t).buffer_addr)
 #define add_inout(task_id, t)  add_tensor_addr((task_id), (t).buffer_addr)
 
-static inline void add_scalar(uint16_t task_id, int64_t t)
+static inline void add_scalar(uint32_t task_id, int64_t t)
 {
     int idx = g_basic_buf[task_id & RING_MASK].scalar_cnt++;
     g_basic_buf[task_id & RING_MASK].scalar[idx] = t;
@@ -94,7 +124,7 @@ static inline void unlock(int slotIdx)
     atomic_flag_clear_explicit(&g_lock_buf[slotIdx], memory_order_release);
 }
 
-static inline int add_predecessors(uint16_t task_id, uint16_t target[], uint16_t n, uint16_t start)
+static inline int add_predecessors(uint32_t task_id, uint32_t target[], uint32_t n, uint32_t start)
 {
     int slotIdx = task_id & RING_MASK;
     struct predecessor_list *ptr = &g_predecessors[slotIdx];
@@ -102,19 +132,36 @@ static inline int add_predecessors(uint16_t task_id, uint16_t target[], uint16_t
     if (ptr->cnt <= 0)
         ptr->exp = atomic_load(&g_predecessor_ring.tail);
     
-    uint16_t min_uncomplete_task = atomic_load_explicit(&g_min_uncomplete_task, memory_order_acquire);
-    for (uint16_t i = 0; i < n; i++)
+    uint32_t min_uncomplete_task = atomic_load_explicit(&g_min_uncomplete_task, memory_order_acquire);
+    for (uint32_t i = 0; i < n; i++)
     {
         if (target[i] < min_uncomplete_task)
             continue;
+
+#ifdef ENABLE_DAG_DEDUP
+        /* Skip target[i] if another candidate target[j] already has it as
+         * an ancestor -- the direct edge would be redundant. */
+        bool redundant = false;
+        for (uint32_t j = 0; j < n; j++) {
+            if (j == i)
+                continue;
+            if (ancestor_test(target[j], target[i])) {
+                redundant = true;
+                break;
+            }
+        }
+        if (redundant)
+            continue;
+#endif /* ENABLE_DAG_DEDUP */
+
         WORKER_LOGF("succeed,task_id,%u,predecessor_id,%u,idx,%d", task_id, target[i], cnt);
         /*
-         * 申请一个 uint16_t 槽位。不能用 atomic_fetch_add(tail, 1)：
+         * 申请一个 uint32_t 槽位。不能用 atomic_fetch_add(tail, 1)：
          * C11 对原子指针做 fetch_add 时按「整数字节」推进，+1 只挪 1 字节，
          * 连续写入会互相踩踏（Linux/GCC 上已复现：task 9 读到前驱 256 而非 0）。
-         * CAS 里写 expected+1 走指针算术，一次前进 sizeof(uint16_t)。
+         * CAS 里写 expected+1 走指针算术，一次前进 sizeof(uint32_t)。
          */
-        uint16_t *slot = atomic_load_explicit(&g_predecessor_ring.tail, memory_order_relaxed);
+        uint32_t *slot = atomic_load_explicit(&g_predecessor_ring.tail, memory_order_relaxed);
         while (!atomic_compare_exchange_weak_explicit(
                    &g_predecessor_ring.tail, &slot, slot + 1,
                    memory_order_acq_rel, memory_order_relaxed)) {
@@ -124,10 +171,21 @@ static inline int add_predecessors(uint16_t task_id, uint16_t target[], uint16_t
         cnt++;
     }
     ptr->cnt = cnt;
+
+#ifdef ENABLE_DAG_DEDUP
+    /* Record ancestors for every target[i], even skipped ones -- task_id
+     * still depends on them, and later ancestor_test() calls need the
+     * full lineage. */
+    for (uint32_t i = 0; i < n; i++) {
+        ancestor_set_bit(task_id, target[i]);
+        ancestor_union(task_id, target[i]);
+    }
+#endif /* ENABLE_DAG_DEDUP */
+
     return cnt;
 }
 
-static inline bool new_task(uint32_t task_id, uint16_t type, uint16_t count, uint32_t duration)
+static inline bool new_task(uint32_t task_id, uint32_t type, uint32_t count, uint32_t duration)
 {
     /*
      * ring 写满时在此等待消费侧推进 g_min_uncomplete_task。

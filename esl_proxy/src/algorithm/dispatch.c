@@ -93,8 +93,8 @@ static inline void set_mix(int tid)
  */
 static inline void drain_completed_snapshot(int tid)
 {
-    uint16_t task_id[EXE_TYPE_CNT * AIC_OSTD * AIC_CNT];
-    uint16_t complete_cnt = 0;
+    uint32_t task_id[EXE_TYPE_CNT * AIC_OSTD * AIC_CNT];
+    uint32_t complete_cnt = 0;
 
     for (int i = 0; i < EXE_TYPE_CNT; i++) {
         for (int j = 0; j < AIC_OSTD; j++) {
@@ -178,10 +178,10 @@ static inline int send_task(ctrl_t *ctrl, int type)
      * 每核每轮只接一个任务，故名额上限仍是 AIC_CNT。
      */
     uint64_t avail_part = avail_any & ~avail_all;
-    uint16_t cnt = (uint16_t)__builtin_popcountll(avail_any);
+    uint32_t cnt = (uint32_t)__builtin_popcountll(avail_any);
     lat_trace_send_call(type, cnt, free_slot[0], free_slot[AIC_OSTD > 1 ? 1 : 0],
                         avail_all);
-    if (cnt <= 0) {
+    if (cnt == 0) {
 #if LAT_TRACE
         /* 只在无核可发这条冷分支上取队列长度，热路径不受影响 */
         lock_q(&ctrl->ready_queue[type]);
@@ -192,17 +192,17 @@ static inline int send_task(ctrl_t *ctrl, int type)
         WORKER_LOGF("send,free_cnt,%d", cnt);
         return 0;
     }
-    uint16_t task_ids[AIC_CNT];
+    uint32_t task_ids[AIC_CNT];
     if (!batch_dequeue(&ctrl->ready_queue[type], task_ids, &cnt)){
         return 0;
     }
-    for (uint16_t i = 0; i < cnt; i++) {
+    for (uint32_t i = 0; i < cnt; i++) {
         lat_trace_deq(task_ids[i]);
     }
     
     int sent = 0;
-    for (uint16_t i = 0; i < cnt; i++) {
-        uint16_t task_id = task_ids[i];
+    for (uint32_t i = 0; i < cnt; i++) {
+        uint32_t task_id = task_ids[i];
 
 #if ED_ENABLE && !ED_ABLATE_SEND
         /*

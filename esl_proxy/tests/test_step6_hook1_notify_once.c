@@ -12,10 +12,10 @@
 #include "executor.h"
 #include "ring_buf.h"
 
-extern uint16_t g_predecessor_cnt[RING_SIZE];
+extern uint32_t g_predecessor_cnt[RING_SIZE];
 extern task_state *g_state_buf;
-void resolve_dep(uint16_t cnt, uint16_t *cq_buf, uint16_t rq_buf[][RQ_BATCH_SIZE],
-                 uint16_t *ready_cnt);
+void resolve_dep(uint32_t cnt, uint32_t *cq_buf, uint32_t rq_buf[][RQ_BATCH_SIZE],
+                 uint32_t *ready_cnt);
 
 static int g_failures;
 
@@ -167,10 +167,10 @@ static void test_step6_hook2_only_releases_on_unfin_zero(void)
     atomic_store_explicit(&g_unfin_pred_cnt[s_idx], 2, memory_order_release);
     atomic_store_explicit(&g_spec_state[s_idx], ED_SPEC_STAGING, memory_order_release);
 
-    uint16_t rq_buf[2][RQ_BATCH_SIZE] = {{0}};
-    uint16_t ready_cnt[2] = {0, 0};
+    uint32_t rq_buf[2][RQ_BATCH_SIZE] = {{0}};
+    uint32_t ready_cnt[2] = {0, 0};
 
-    uint16_t cq1[1] = {p1};
+    uint32_t cq1[1] = {p1};
     resolve_dep(1, cq1, rq_buf, ready_cnt);
     expect_u16(ready_cnt[type], 0,
                "Hook2: when one predecessor remains, successor must not enter ready queue");
@@ -184,7 +184,7 @@ static void test_step6_hook2_only_releases_on_unfin_zero(void)
     expect_u64(atomic_load_explicit(&g_ed_hit_cnt, memory_order_relaxed), 0,
                "Hook2: with unfin>0, hit counter must stay 0");
 
-    uint16_t cq2[1] = {p2};
+    uint32_t cq2[1] = {p2};
     resolve_dep(1, cq2, rq_buf, ready_cnt);
     expect_u16(ready_cnt[type], 1,
                "Hook2: when unfin reaches 0, successor should enter ready queue once");

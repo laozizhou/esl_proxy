@@ -87,7 +87,7 @@ void lat_trace_init(void);
 void lat_trace_dump(void);
 
 /* 依赖刚满足：本代样本从这里开始，顺带清掉上一代残留 */
-static inline void lat_trace_ready(uint16_t task_id)
+static inline void lat_trace_ready(uint32_t task_id)
 {
     uint16_t idx = (uint16_t)(task_id & RING_MASK);
     atomic_store_explicit(&g_lt_enq_ns[idx], 0, memory_order_relaxed);
@@ -98,14 +98,14 @@ static inline void lat_trace_ready(uint16_t task_id)
     atomic_store_explicit(&g_lt_ready_ns[idx], get_time_ns_hires(), memory_order_relaxed);
 }
 
-static inline void lat_trace_enq(uint16_t task_id)
+static inline void lat_trace_enq(uint32_t task_id)
 {
     uint16_t idx = (uint16_t)(task_id & RING_MASK);
     atomic_store_explicit(&g_lt_enq_ns[idx], get_time_ns_hires(), memory_order_relaxed);
 }
 
 /* 只记首次出队时刻，但出队总次数照数——skip 掉的那几次也是被消耗的名额 */
-static inline void lat_trace_deq(uint16_t task_id)
+static inline void lat_trace_deq(uint32_t task_id)
 {
     uint16_t idx = (uint16_t)(task_id & RING_MASK);
     atomic_fetch_add_explicit(&g_lt_deq_cnt[idx], 1, memory_order_relaxed);
@@ -117,7 +117,7 @@ static inline void lat_trace_deq(uint16_t task_id)
 }
 
 /* 槽位变 RUNNABLE：与 ed_lat_mark_runnable 同点调用，只认第一次 */
-static inline void lat_trace_run(uint16_t task_id, unsigned path)
+static inline void lat_trace_run(uint32_t task_id, unsigned path)
 {
     uint16_t idx = (uint16_t)(task_id & RING_MASK);
     uint8_t expected = LAT_TRACE_PATH_NONE;
@@ -150,7 +150,7 @@ static inline void lat_trace_setmix(uint64_t before_bits, uint64_t after_bits)
  * s0/s1 为头两个 slot 各自的空闲核位图，all 为「全部 slot 都空闲」的核位图；
  * free_cnt 是 send_task 实际可派发的核数（任一 slot 空闲的核数）。
  */
-static inline void lat_trace_send_call(int type, uint16_t free_cnt,
+static inline void lat_trace_send_call(int type, uint32_t free_cnt,
                                        uint64_t s0, uint64_t s1, uint64_t all)
 {
     atomic_fetch_add_explicit(&g_lt_send_call_cnt[type], 1, memory_order_relaxed);
@@ -183,10 +183,10 @@ static inline void lat_trace_send_starve(int type, uint64_t waiters)
 
 static inline void lat_trace_init(void) {}
 static inline void lat_trace_dump(void) {}
-static inline void lat_trace_ready(uint16_t task_id) { (void)task_id; }
-static inline void lat_trace_enq(uint16_t task_id) { (void)task_id; }
-static inline void lat_trace_deq(uint16_t task_id) { (void)task_id; }
-static inline void lat_trace_run(uint16_t task_id, unsigned path)
+static inline void lat_trace_ready(uint32_t task_id) { (void)task_id; }
+static inline void lat_trace_enq(uint32_t task_id) { (void)task_id; }
+static inline void lat_trace_deq(uint32_t task_id) { (void)task_id; }
+static inline void lat_trace_run(uint32_t task_id, unsigned path)
 {
     (void)task_id;
     (void)path;
@@ -197,7 +197,7 @@ static inline void lat_trace_setmix(uint64_t before_bits, uint64_t after_bits)
     (void)before_bits;
     (void)after_bits;
 }
-static inline void lat_trace_send_call(int type, uint16_t free_cnt,
+static inline void lat_trace_send_call(int type, uint32_t free_cnt,
                                        uint64_t s0, uint64_t s1, uint64_t all)
 {
     (void)type;

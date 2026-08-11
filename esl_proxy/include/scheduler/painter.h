@@ -9,13 +9,22 @@
 
 #include "scheduler/conf.h"
 #include "scheduler/dispatch.h"
-#include "scheduler/template_graph.h"
+
+#ifndef SCHEDULER_CASE
+#define SCHEDULER_CASE cases/qwen3_14b_decode_subgraph.h
+#endif
+
+/* Macro to stringify the include directive properly */
+#define __INCLUDE(x) #x
+#define _INCLUDE_FILE(x) __INCLUDE(x)
+#include _INCLUDE_FILE(SCHEDULER_CASE)
+
 #include "common/task.h"
 #include "common/queue.h"
 
 struct node_list {
-    uint16_t cnt;
-    uint16_t node[CON_NODE_CNT];
+    uint32_t cnt;
+    uint32_t node[CON_NODE_CNT];
     struct node_list* next;
 };
 
@@ -23,7 +32,7 @@ struct node_list {
  * which conflicts with common/queue.h) */
 extern atomic_int g_task_id;
 extern atomic_int g_min_uncomplete_task;
-struct node_list g_successor_buf[RING_SIZE];
+
 
 void *painter(void *arg);
 void init_state_buf(void);

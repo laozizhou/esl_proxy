@@ -65,7 +65,7 @@ static uint8_t g_mem_pool_storage[MEM_POOL_BYTES];
 static when2free_entry_t g_when2free_entries[WHEN2FREE_CAP];
 
 extern atomic_bool g_orch_is_done;
-extern uint16_t g_completed_task_cnt;
+extern uint32_t g_completed_task_cnt;
 
 int main(void) {
     pthread_t dispatch_threads[DISPATCH_THREAD_CNT];

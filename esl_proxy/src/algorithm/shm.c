@@ -24,8 +24,11 @@ struct node_list g_successor_exp_buf[HALF_RING_SIZE];
 
 struct predecessor_list g_predecessors[RING_SIZE];
 struct ring_buf g_predecessor_ring;
+#ifdef ENABLE_DAG_DEDUP
+uint64_t g_ancestors[RING_SIZE][ANCESTOR_WORDS];
+#endif /* ENABLE_DAG_DEDUP */
 
-uint16_t g_task_id_buf[RING_SIZE];
+uint32_t g_task_id_buf[RING_SIZE];
 executor_t g_executors[EXE_TYPE_CNT][AIC_CNT];
 atomic_flag g_lock_buf[RING_SIZE];
 mem_pool_t g_mem_pool;
@@ -37,6 +40,9 @@ void init_predecessors(void)
         g_predecessors[i].cnt = 0;
         g_predecessors[i].exp = NULL;
     }
+#ifdef ENABLE_DAG_DEDUP
+    memset(g_ancestors, 0, sizeof(g_ancestors));
+#endif /* ENABLE_DAG_DEDUP */
 }
 
 uint32_t ring_min_uncompleted(void)

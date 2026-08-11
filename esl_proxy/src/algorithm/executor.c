@@ -97,8 +97,8 @@ void* executor_worker(void *arg)
             for (int t = 0; t < EXE_TYPE_CNT; t++) {
                 for (int c = 0; c < AIC_CNT; c++) {
                     for (int sl = 0; sl < AIC_OSTD; sl++) {
-                        uint16_t task = g_executors[t][c].tasks[sl];
-                        uint16_t s_idx = task & RING_MASK;
+                        uint32_t task = g_executors[t][c].tasks[sl];
+                        uint16_t s_idx = (uint16_t)(task & RING_MASK);
                         WORKER_LOGF("slot_state_dump, s=%u, unfin=%u, spec=%u, state=%u, doorbell=%u",
                                     task,
                                     (unsigned)atomic_load_explicit(&g_unfin_pred_cnt[s_idx], memory_order_relaxed),

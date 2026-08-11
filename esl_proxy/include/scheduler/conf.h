@@ -1,6 +1,19 @@
 #ifndef SCHEDULER_CONF_H
 #define SCHEDULER_CONF_H
 
+#include <pthread.h>
+
+/* Portable barrier for synchronizing simultaneous thread start */
+typedef struct {
+    pthread_mutex_t mutex;
+    pthread_cond_t  cond;
+    int             count;
+    int             needed;
+} barrier_t;
+
+void barrier_wait(barrier_t *b);
+extern barrier_t g_start_barrier;
+
 #define RING_SIZE 2048
 #define RING_MASK (RING_SIZE - 1)
 #define HALF_RING_SIZE 1024
@@ -8,17 +21,29 @@
 #define CON_NODE_CNT 32
 
 #define AIC_OSTD 2
-#define AIC_CNT 60
+#define AIC_CNT 64
+
+#define AIC_CNT_PER_DIE 32
 #define DIE_CNT 2
 #define EXE_TYPE_CNT 2
+
+#define SPSC_QUEUE_SIZE 2048
+#define SPSC_QUEUE_MASK (SPSC_QUEUE_SIZE - 1)
 
 #define CQ_BATCH_SIZE 512
 #define PRE_BATCH_SIZE 240
 #define RQ_BATCH_SIZE 512
 #define DISPATCH_COMPLETE_BATCH 512
+#define REMOTE_RING_SIZE 4096
+#define REMOTE_RING_MASK (REMOTE_RING_SIZE - 1)
 
+#ifndef PAINTER_THREAD_CNT
 #define PAINTER_THREAD_CNT 2
+#endif
+#ifndef DISPATCH_THREAD_CNT
 #define DISPATCH_THREAD_CNT 2
+#endif
+#define AIC_CNT_PER_THREAD 32
 
 /* 1: compile in worker logs; toggle at runtime via g_worker_log or WORKER_LOG env */
 #define WORKER_LOG 1

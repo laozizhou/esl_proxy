@@ -233,7 +233,7 @@ void ed_init(void)
 /* -------------------------------------------------------------------------
  * ready->runnable 延迟采样
  * ------------------------------------------------------------------------- */
-void ed_lat_mark_ready(uint16_t task_id)
+void ed_lat_mark_ready(uint32_t task_id)
 {
     uint16_t idx = (uint16_t)(task_id & RING_MASK);
     /*
@@ -244,7 +244,7 @@ void ed_lat_mark_ready(uint16_t task_id)
     atomic_store_explicit(&g_ed_ready_tag[idx], (uint32_t)task_id, memory_order_release);
 }
 
-void ed_lat_mark_runnable(uint16_t task_id, int path)
+void ed_lat_mark_runnable(uint32_t task_id, int path)
 {
     uint16_t idx = (uint16_t)(task_id & RING_MASK);
     uint32_t expected_tag = (uint32_t)task_id;
@@ -355,7 +355,7 @@ void ed_notify_once(uint32_t task_id, uint64_t record, ed_notify_source_t source
 #if ED_ENABLE
 static __thread unsigned int s_ed_rand_seed;
 
-static inline void ed_enqueue_or_abandon(uint16_t task_id)
+static inline void ed_enqueue_or_abandon(uint32_t task_id)
 {
     if (enqueue(&g_ed_ready_queue, task_id)) {
         return;
@@ -368,7 +368,7 @@ static inline void ed_enqueue_or_abandon(uint16_t task_id)
         memory_order_acq_rel, memory_order_acquire);
 }
 
-static inline void ed_maybe_enter_staging(uint16_t s_id, uint16_t s_idx, uint16_t fanin_now)
+static inline void ed_maybe_enter_staging(uint32_t s_id, uint16_t s_idx, uint16_t fanin_now)
 {
     if (fanin_now != g_dispatch_fanin_target[s_idx]) {
         return;
@@ -395,7 +395,7 @@ static inline void ed_maybe_enter_staging(uint16_t s_id, uint16_t s_idx, uint16_
     }
 }
 
-void propagate_dispatch_fanin(uint16_t p_id)
+void propagate_dispatch_fanin(uint32_t p_id)
 {
     uint16_t p_idx = (uint16_t)(p_id & RING_MASK);
     ed_edge_lock(p_idx);
@@ -407,9 +407,9 @@ void propagate_dispatch_fanin(uint16_t p_id)
     /* 持久记录“该 generation 曾 dispatch”；完成时不清。 */
     atomic_store_explicit(&g_dispatch_tag[p_idx], (uint32_t)p_id, memory_order_release);
 
-    uint16_t succ_cnt = g_successor_buf[p_idx].cnt;
-    for (uint16_t k = 0; k < succ_cnt; k++) {
-        uint16_t s_id = g_successor_buf[p_idx].node[k];
+    uint32_t succ_cnt = g_successor_buf[p_idx].cnt;
+    for (uint32_t k = 0; k < succ_cnt; k++) {
+        uint32_t s_id = g_successor_buf[p_idx].node[k];
         uint16_t s_idx = (uint16_t)(s_id & RING_MASK);
 
         /*
@@ -434,13 +434,13 @@ void propagate_dispatch_fanin(uint16_t p_id)
     ed_edge_unlock(p_idx);
 }
 
-static int pick_stage_core(int tid, uint16_t s_id, task_type_t type, int *out_slot)
+static int pick_stage_core(int tid, uint32_t s_id, task_type_t type, int *out_slot)
 {
     uint16_t s_idx = (uint16_t)(s_id & RING_MASK);
     uint64_t pcore_bitmap = 0;
     ed_pred_snapshot_t *snap = &g_ed_pred_snapshot[s_idx];
     for (uint16_t k = 0; k < snap->cnt; k++) {
-        uint16_t p_id = snap->node[k];
+        uint32_t p_id = snap->node[k];
         uint16_t p_idx = (uint16_t)(p_id & RING_MASK);
         if (g_state_buf != NULL &&
             g_state_buf[p_idx].state == TASK_STATUS_COMPLETED) {
@@ -520,7 +520,7 @@ static int pick_stage_core(int tid, uint16_t s_id, task_type_t type, int *out_sl
 
 int try_early_dispatch(int tid)
 {
-    uint16_t s_id = 0;
+    uint32_t s_id = 0;
     if (!dequeue(&g_ed_ready_queue, &s_id)) {
         return 0;
     }

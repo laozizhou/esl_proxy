@@ -111,7 +111,7 @@ extern atomic_flag       g_ed_edge_lock[RING_SIZE];
 /* add_successors 快照的前驱 task_id 列表，供 pick_stage_core 查 dispatch record */
 typedef struct {
     uint16_t cnt;
-    uint16_t node[CON_NODE_CNT];
+    uint32_t node[CON_NODE_CNT];
 } ed_pred_snapshot_t;
 extern ed_pred_snapshot_t g_ed_pred_snapshot[RING_SIZE];
 
@@ -188,10 +188,10 @@ extern _Atomic uint64_t g_ed_lat_max_ns[ED_LAT_PATH_CNT];
 extern _Atomic uint64_t g_ed_lat_hist[ED_LAT_PATH_CNT][ED_LAT_BUCKET_CNT];
 
 /* 依赖满足瞬间打点；单写者（cutter 线程）调用 */
-void ed_lat_mark_ready(uint16_t task_id);
+void ed_lat_mark_ready(uint32_t task_id);
 
 /* 槽位变 RUNNABLE 瞬间收样本；同一代任务只计入首次，其余调用自动丢弃 */
-void ed_lat_mark_runnable(uint16_t task_id, int path);
+void ed_lat_mark_runnable(uint32_t task_id, int path);
 
 /* -------------------------------------------------------------------------
  * 生命周期 API
@@ -221,7 +221,7 @@ bool ed_record_tag_matches(uint64_t record, uint32_t task_id);
 void ed_notify_once(uint32_t task_id, uint64_t record, ed_notify_source_t source);
 
 #if ED_ENABLE
-void propagate_dispatch_fanin(uint16_t p_id);
+void propagate_dispatch_fanin(uint32_t p_id);
 int  try_early_dispatch(int tid);
 #endif
 

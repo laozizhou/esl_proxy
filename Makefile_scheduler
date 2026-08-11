@@ -1,29 +1,48 @@
 # Makefile for scheduler (scheduler.c, dispatch.c, painter.c)
 #
 # Usage:
-#   make -f Makefile_scheduler        # compile
-#   make -f Makefile_scheduler run    # compile and run
-#            -D MAIN_LOG=1 -DWORKER_LOG=1 \
+#   make -f Makefile_scheduler             # default case, THREAD_CNT=2
+#   make -f Makefile_scheduler run         # compile and run
+#   make -f Makefile_scheduler CASE=cases/qwen3_14b_decode_subgraph.h THREAD_CNT=2 run
+#   make -f Makefile_scheduler CLEAN=1     # clean before build
+
+CASE ?= cases/qwen3_14b_decode_subgraph.h
+THREAD_CNT ?= 2
+TARGET_NAME ?= scheduler_test
+
+# LOG ?= 1
 
 CC       := cc
 CFLAGS   := -g -std=c11 -Wall -O2 \
             -I esl_proxy/include \
-            -Wno-macro-redefined
+            -Wno-macro-redefined \
+            -DSCHEDULER_CASE=$(CASE) \
+            -DPAINTER_THREAD_CNT=$(THREAD_CNT) \
+            -DDISPATCH_THREAD_CNT=$(THREAD_CNT)
+
+# ifeq ($(LOG),1)
+# CFLAGS   += -DWORKER_LOG=1 -DLOG_OUTPUT_MODE=0
+# LOG_SRCS := esl_proxy/src/scheduler/log.c
+# else
+# CFLAGS   += -DWORKER_LOG=0 -DLOG_OUTPUT_MODE=0
+# LOG_SRCS :=
+# endif
 
 UNAME_S  := $(shell uname -s)
 ifeq ($(UNAME_S),Linux)
-    LDFLAGS  := -lpthread -latomic
+    LDFLAGS  := -static -lpthread -latomic
 else
     LDFLAGS  := -lpthread
 endif
 
 BIN_DIR  := bin
-TARGET   := $(BIN_DIR)/scheduler_test
+TARGET   := $(BIN_DIR)/$(TARGET_NAME)
 
 SRCS := \
     esl_proxy/src/scheduler/scheduler.c \
     esl_proxy/src/scheduler/dispatch.c \
     esl_proxy/src/scheduler/painter.c
+#     $(LOG_SRCS)
 
 OBJS := $(patsubst esl_proxy/src/scheduler/%.c,$(BIN_DIR)/scheduler/%.o,$(SRCS))
 
@@ -44,4 +63,4 @@ run: all
 	$(TARGET)
 
 clean:
-	rm -rf $(BIN_DIR)/scheduler $(TARGET)
+	rm -rf $(BIN_DIR)/scheduler $(BIN_DIR)/$(TARGET_NAME)

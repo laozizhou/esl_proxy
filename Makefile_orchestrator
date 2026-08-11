@@ -1,0 +1,61 @@
+# Orchestrator: alloc → desc → detect
+#
+#   make -f Makefile_orchestrator
+#   make -f Makefile_orchestrator run ARGS="4 4"
+#   Baseline (no tickets):
+#     make -f Makefile_orchestrator clean all EXTRA_CFLAGS="-DORCH_USE_INSERT_TICKETS=0"
+#   Optimized (default):
+#     make -f Makefile_orchestrator clean all
+
+CC       := cc
+CFLAGS   := -g -std=c11 -Wall -Wextra -pedantic -O2 -D_POSIX_C_SOURCE=199309L \
+            -I esl_proxy/include/algorithm -I esl_proxy/cases \
+            -MMD -MP -Wno-error=implicit-function-declaration
+
+ifneq ($(EXTRA_CFLAGS),)
+CFLAGS   += $(EXTRA_CFLAGS)
+endif
+
+UNAME_S  := $(shell uname -s)
+ifeq ($(UNAME_S),Linux)
+    LDFLAGS := -lpthread -latomic
+else
+    LDFLAGS := -lpthread
+endif
+
+OBJ_DIR  := build/orchestrator
+TARGET   := bin/orchestrator
+
+SRCS := \
+    esl_proxy/src/orchestrator/orchestrator.c \
+    esl_proxy/src/orchestrator/orc_alloc.c \
+    esl_proxy/src/orchestrator/orc_desc.c \
+    esl_proxy/src/orchestrator/orc_detect.c \
+    esl_proxy/src/algorithm/log.c \
+    esl_proxy/src/algorithm/shm.c
+
+OBJS := $(patsubst esl_proxy/src/%.c,$(OBJ_DIR)/%.o,$(SRCS))
+DEPS := $(OBJS:.o=.d)
+ARGS ?=
+
+.PHONY: all run clean
+
+all: $(TARGET)
+
+$(TARGET): $(OBJS) | bin
+	$(CC) $(CFLAGS) $(OBJS) -o $@ $(LDFLAGS)
+
+$(OBJ_DIR)/%.o: esl_proxy/src/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(OBJ_DIR) bin:
+	mkdir -p $@
+
+run: all
+	./$(TARGET) $(ARGS)
+
+clean:
+	rm -rf $(OBJ_DIR) $(TARGET)
+
+-include $(DEPS)

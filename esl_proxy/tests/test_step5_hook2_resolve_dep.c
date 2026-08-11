@@ -10,9 +10,9 @@
 #include "early_dispatch.h"
 #include "ring_buf.h"
 
-extern uint16_t g_predecessor_cnt[RING_SIZE];
+extern uint32_t g_predecessor_cnt[RING_SIZE];
 extern task_state *g_state_buf;
-void resolve_dep(uint16_t cnt, uint16_t* cq_buf, uint16_t rq_buf[][RQ_BATCH_SIZE], uint16_t* ready_cnt);
+void resolve_dep(uint32_t cnt, uint32_t* cq_buf, uint32_t rq_buf[][RQ_BATCH_SIZE], uint32_t* ready_cnt);
 
 static int g_failures;
 
@@ -62,9 +62,9 @@ static void test_step5_resolve_dep_none_to_dispatched(void)
     const uint16_t s = 12;
     const uint16_t p_idx = (uint16_t)(p & RING_MASK);
     const uint16_t s_idx = (uint16_t)(s & RING_MASK);
-    uint16_t cq_buf[1] = {p};
-    uint16_t rq_buf[2][RQ_BATCH_SIZE] = {{0}};
-    uint16_t ready_cnt[2] = {0, 0};
+    uint32_t cq_buf[1] = {p};
+    uint32_t rq_buf[2][RQ_BATCH_SIZE] = {{0}};
+    uint32_t ready_cnt[2] = {0, 0};
 
     g_basic_buf[s_idx].type = TASK_TYPE_CUBE;
     g_state_buf[p_idx].successor_cnt = 1;
@@ -96,9 +96,9 @@ static void test_step5_resolve_dep_staging_to_dispatched(void)
     const uint16_t s = 22;
     const uint16_t p_idx = (uint16_t)(p & RING_MASK);
     const uint16_t s_idx = (uint16_t)(s & RING_MASK);
-    uint16_t cq_buf[1] = {p};
-    uint16_t rq_buf[2][RQ_BATCH_SIZE] = {{0}};
-    uint16_t ready_cnt[2] = {0, 0};
+    uint32_t cq_buf[1] = {p};
+    uint32_t rq_buf[2][RQ_BATCH_SIZE] = {{0}};
+    uint32_t ready_cnt[2] = {0, 0};
 
     g_basic_buf[s_idx].type = TASK_TYPE_CUBE;
     g_state_buf[p_idx].successor_cnt = 1;

@@ -9,8 +9,8 @@
 #include "ring_buf.h"
 
 /* cutter.h 暂未导出该内部函数与游标，测试里显式声明。 */
-extern uint16_t g_commit_task_id;
-void add_successors(uint16_t ready_cnt[], uint16_t rq_buf[][RQ_BATCH_SIZE]);
+extern uint32_t g_commit_task_id;
+void add_successors(uint32_t ready_cnt[], uint32_t rq_buf[][RQ_BATCH_SIZE]);
 
 static int g_failures;
 
@@ -44,8 +44,8 @@ static void test_add_successors_uses_right_open_window(void)
     g_basic_buf[0].type = TASK_TYPE_CUBE;
     g_basic_buf[1].type = TASK_TYPE_VECTOR; /* 若误处理到 1，可被本测试观察到 */
 
-    uint16_t ready_cnt[2] = {0, 0};
-    uint16_t rq_buf[2][RQ_BATCH_SIZE] = {{0}};
+    uint32_t ready_cnt[2] = {0, 0};
+    uint32_t rq_buf[2][RQ_BATCH_SIZE] = {{0}};
     add_successors(ready_cnt, rq_buf);
 
     expect_u16(g_commit_task_id, 1,
@@ -72,8 +72,8 @@ static void test_add_successors_respects_pre_batch_cap(void)
         g_basic_buf[i].type = TASK_TYPE_CUBE;
     }
 
-    uint16_t ready_cnt[2] = {0, 0};
-    uint16_t rq_buf[2][RQ_BATCH_SIZE] = {{0}};
+    uint32_t ready_cnt[2] = {0, 0};
+    uint32_t rq_buf[2][RQ_BATCH_SIZE] = {{0}};
     add_successors(ready_cnt, rq_buf);
 
     expect_u16(g_commit_task_id, PRE_BATCH_SIZE,

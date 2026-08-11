@@ -144,8 +144,8 @@ static void test_drain_snapshot_maps_task_id_and_recovers_free_bits(void)
     int sent = dispatch(0);
     expect_true(sent == 0, "dispatch should only drain completions in this test");
 
-    uint16_t completed[8] = {0};
-    uint16_t n = (uint16_t)(sizeof(completed) / sizeof(completed[0]));
+    uint32_t completed[8] = {0};
+    uint32_t n = (uint32_t)(sizeof(completed) / sizeof(completed[0]));
     bool deq_ok = batch_dequeue(&g_ctrl_t[0].completed_queue, completed, &n);
     expect_true(deq_ok, "completed_queue should receive drained task ids");
     expect_u16(n, 2, "drain should enqueue two completed task ids");

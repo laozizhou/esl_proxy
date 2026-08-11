@@ -1,10 +1,18 @@
 #ifndef ALGORITHM_CONF_H
 #define ALGORITHM_CONF_H
 
+#ifndef RING_SIZE
 #define RING_SIZE 4096
+#endif
+#ifndef RING_MASK
 #define RING_MASK (RING_SIZE - 1)
-#define HALF_RING_SIZE 2048
-#define NODE_BUFF_SIZE 8192
+#endif
+#ifndef HALF_RING_SIZE
+#define HALF_RING_SIZE (RING_SIZE / 2)
+#endif
+#ifndef NODE_BUFF_SIZE
+#define NODE_BUFF_SIZE 65536
+#endif
 
 // TODO: ERROR
 #define CON_NODE_CNT 32
@@ -60,9 +68,15 @@
 #define RQ_BATCH_SIZE 512
 #define DISPATCH_COMPLETE_BATCH 512
 
+#ifndef CUTTER_THREAD_CNT
 #define CUTTER_THREAD_CNT 1
+#endif
+#ifndef DISPATCH_THREAD_CNT
 #define DISPATCH_THREAD_CNT 1
+#endif
+#ifndef EXECUTOR_THREAD_CNT
 #define EXECUTOR_THREAD_CNT 1
+#endif
 
 /* 1: compile in worker logs; toggle at runtime via g_worker_log or WORKER_LOG env */
 #define WORKER_LOG 1

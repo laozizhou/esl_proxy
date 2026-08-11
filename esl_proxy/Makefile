@@ -1,15 +1,19 @@
 # esl_proxy build
 #
 # Usage:
-#   make          # default: qwen3_dynamic_manual_scope.h, QWEN3_SPMD_TIER=2
+#   make          # default: qwen3_dynamic_manual_scope.h, THREAD_CNT=1
 #   make run
 #   make run WORKER_LOG=1
 #
 # Cases (cases/*.h):
 #   make CASE=qwen3_dynamic_manual_scope.h run
 #   make CASE=qwen3_dynamic_tensormap.h run
+#   make CASE=qwen3_14b_decode_subgraph.h run
 #   make CASE=paged_attention_unroll.h run
 #   make CASE=paged_attention_unroll_manual_scope.h run
+#
+# Thread count (default 1):
+#   make CASE=qwen3_14b_decode_subgraph.h THREAD_CNT=2 run
 #
 # Qwen3 SPMD tier (0=non-spmd .. 4=all-spmd; default 2 = spmd-4 for qwen3 cases):
 #   make CASE=qwen3_dynamic_tensormap.h QWEN3_SPMD_TIER=0 run
@@ -23,7 +27,6 @@
 ALL_CASES := \
 	qwen3_dynamic_manual_scope.h \
 	qwen3_dynamic_tensormap.h \
-	qwen3_dynamic_tensormap_ot1.h \
 	paged_attention_unroll.h \
 	paged_attention_unroll_manual_scope.h \
 	ed_a10_probe.h \
@@ -36,7 +39,12 @@ ifneq ($(filter $(CASE),$(ALL_CASES)),$(CASE))
 $(error Unknown CASE='$(CASE)'. Valid: $(ALL_CASES))
 endif
 
-QWEN3_CASES := qwen3_dynamic_manual_scope.h qwen3_dynamic_tensormap.h qwen3_dynamic_tensormap_ot1.h
+QWEN3_CASES := qwen3_dynamic_manual_scope.h qwen3_dynamic_tensormap.h
+
+# Thread count for cutter/dispatch threads (default: 1)
+# 目前只支持 THREAD_CNT=1：cutter 的 send_2_ready_queue 把 target_ctrl 写死为 0，
+# THREAD_CNT>=2 时 1 号 dispatcher 永远拿不到任务，收尾条件不成立会挂住。
+THREAD_CNT ?= 1
 
 CC       := cc
 # -MMD -MP emits a .d alongside each .o listing the headers it included, so a
@@ -46,12 +54,13 @@ CC       := cc
 # 200809L 是 199309L 的超集，不会丢失原有特性。改这里时 src/*.c、tests/*.c 与
 # tools/gen_compile_commands.py 里的同名 #define 必须同步，否则会触发宏重定义告警。
 CFLAGS   := -g -std=c11 -Wall -Wextra -pedantic -O2 -D_POSIX_C_SOURCE=200809L \
-	-I include/algorithm -I cases -DORCH_CASE=$(CASE) -MMD -MP -Wno-error=implicit-function-declaration
+	-I include/algorithm -I cases -DORCH_CASE=$(CASE) -MMD -MP -Wno-error=implicit-function-declaration \
+	-DCUTTER_THREAD_CNT=$(THREAD_CNT) -DDISPATCH_THREAD_CNT=$(THREAD_CNT)
 
 # -latomic is needed on Linux but not on macOS (clang)
 UNAME_S  := $(shell uname -s)
 ifeq ($(UNAME_S),Linux)
-    LDFLAGS  := -lpthread -latomic
+    LDFLAGS  := -static -lpthread -latomic
 else
     LDFLAGS  := -lpthread
 endif
@@ -107,7 +116,7 @@ DEPS := $(OBJS:.o=.d)
 # 配置指纹：任何影响编译结果的开关都必须出现在这里，包括 EXTRA_CFLAGS
 # （scripts/ed_a11_probe.sh、ed_a12_probe.sh 用它注入 -DED_A11_PROBE 等探针宏）。
 ORCH_STAMP := build/.orch-config
-ORCH_CONFIG := case=$(CASE) tier=$(QWEN3_SPMD_TIER) log=$(MAIN_LOG) ed=$(ED_ENABLE) ed_thr=$(ED_UNFIN_THRESHOLD) ed_spmd_max=$(ED_SPMD_MAX_BLOCKS) dur_scale=$(EXEC_DURATION_SCALE) ostd=$(AIC_OSTD) lat_trace=$(LAT_TRACE) extra=$(EXTRA_CFLAGS)
+ORCH_CONFIG := case=$(CASE) tier=$(QWEN3_SPMD_TIER) log=$(MAIN_LOG) ed=$(ED_ENABLE) ed_thr=$(ED_UNFIN_THRESHOLD) ed_spmd_max=$(ED_SPMD_MAX_BLOCKS) dur_scale=$(EXEC_DURATION_SCALE) ostd=$(AIC_OSTD) lat_trace=$(LAT_TRACE) threads=$(THREAD_CNT) extra=$(EXTRA_CFLAGS)
 
 # 配置切换保护：在 Makefile 解析阶段（早于任何目标被考虑）比对指纹，不一致就直接
 # 删掉全部产物，强制重编重链。
