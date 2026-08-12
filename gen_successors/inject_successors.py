@@ -172,17 +172,16 @@ def derive_name(predecessors_name, new_word):
     return predecessors_name.replace("predecessors", new_word)
 
 
-def main():
-    ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("input", help="path to the original .h file (read-only)")
-    ap.add_argument("-o", "--output", help="output path (default: <input>_suc.h next to the input)")
-    args = ap.parse_args()
-
-    in_path = Path(args.input)
+def process_file(input_path, output_path=None):
+    """Read input_path, inject suc_cnt/suc_idx/successors, write to output_path
+    (default: <input>_suc.h next to input_path). Returns (out_path, total_local,
+    total_edges, n_groups). Raises ValueError if input_path doesn't match the
+    expected `subgraph` struct + `test_graph[]` shape."""
+    in_path = Path(input_path)
     text = in_path.read_text()
 
-    if args.output:
-        out_path = Path(args.output)
+    if output_path:
+        out_path = Path(output_path)
     else:
         out_path = in_path.with_name(in_path.stem + "_suc" + in_path.suffix)
 
@@ -262,7 +261,17 @@ def main():
 
     total_edges = sum(len(g["predecessors"]) for g in groups)
     total_local = sum(len(s) for s in successors)
-    print(f"wrote {out_path}: {total_local}/{total_edges} edges resolved across {len(groups)} group(s)")
+    return out_path, total_local, total_edges, len(groups)
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("input", help="path to the original .h file (read-only)")
+    ap.add_argument("-o", "--output", help="output path (default: <input>_suc.h next to the input)")
+    args = ap.parse_args()
+
+    out_path, total_local, total_edges, n_groups = process_file(args.input, args.output)
+    print(f"wrote {out_path}: {total_local}/{total_edges} edges resolved across {n_groups} group(s)")
 
 
 if __name__ == "__main__":
