@@ -17,12 +17,12 @@ ordering of every id across all groups; this only coincides with the raw
 task_id value when ids are a contiguous 0..total_task_cnt-1 range (true of
 every real case file checked so far, but not assumed blindly here).
 
-Also emits suc_type_N[total_task_cnt]: the `type` of every task across the
-whole graph, indexed by that same position. Unlike suc_cnt/successors, its
-CONTENT is identical for every group (it's just every group's own `type`
-array merged into one, by position) - it's written out once per group under
-that group's own name (suc_type_1, suc_type_2, ...) rather than shared via
-a single pointer, purely to keep the naming symmetric with suc_cnt/successors.
+Also emits a single global suc_type[total_task_cnt]: the `type` of every
+task across the whole graph, indexed by that same position (every group's
+own `type` array merged into one, by position). Unlike suc_cnt/successors
+its content is identical regardless of which group you'd look at it from,
+so it's NOT a per-group struct field - it's one plain array declared once,
+right before the `subgraph` struct typedef.
 
 Same output convention as v1: writes a new file, default <input>_suc.h next
 to the input; the input is never modified.
@@ -279,7 +279,6 @@ def process_file(input_path, output_path=None):
         suc_cnt_name = derive_name(gv["predecessors_var"], "suc_cnt")
         suc_idx_name = derive_name(gv["predecessors_var"], "suc_idx")
         successors_name = derive_name(gv["predecessors_var"], "successors")
-        suc_type_name = derive_name(gv["predecessors_var"], "suc_type")
         block = (
             f"\nstatic {gv['pre_cnt_type']} {suc_cnt_name}[{total_task_cnt}] = "
             f"{{{', '.join(str(x) for x in suc_cnt[g])}}};"
@@ -287,15 +286,12 @@ def process_file(input_path, output_path=None):
             f"{{{', '.join(str(x) for x in suc_idx[g])}}};"
             f"\nstatic {gv['pred_type']} {successors_name}[] = "
             f"{{{', '.join(str(x) for x in successors[g])}}};"
-            f"\nstatic {gv['type_type']} {suc_type_name}[{total_task_cnt}] = "
-            f"{{{', '.join(str(x) for x in suc_type_vals)}}};"
         )
         insert_pos = gv["predecessors_span"][1]
         edits.append((insert_pos, block))
         gv["suc_cnt_name"] = suc_cnt_name
         gv["suc_idx_name"] = suc_idx_name
         gv["successors_name"] = successors_name
-        gv["suc_type_name"] = suc_type_name
 
     struct_name2, fields2, struct_span = parse_struct_fields(text)
     struct_close = text.rfind("}", struct_span[0], struct_span[1])
@@ -304,15 +300,20 @@ def process_file(input_path, output_path=None):
         f"    {first['pre_cnt_type']}* suc_cnt;\n"
         f"    {first['pre_idx_type']}* suc_idx;\n"
         f"    {first['pred_type']}* successors;\n"
-        f"    {first['type_type']}* suc_type;\n"
     )
     edits.append((struct_close, struct_field_block))
 
+    # suc_type is identical everywhere (not target-group-split like suc_cnt),
+    # so it's a single global array, not a per-group struct field: inserted
+    # once, right before the struct typedef.
+    suc_type_block = (
+        f"static {first['type_type']} suc_type[{total_task_cnt}] = "
+        f"{{{', '.join(str(x) for x in suc_type_vals)}}};\n\n"
+    )
+    edits.append((struct_span[0], suc_type_block))
+
     for (start, end), gv in zip(entries, group_vars):
-        addition = (
-            f", {gv['suc_cnt_name']}, {gv['suc_idx_name']}, "
-            f"{gv['successors_name']}, {gv['suc_type_name']}"
-        )
+        addition = f", {gv['suc_cnt_name']}, {gv['suc_idx_name']}, {gv['successors_name']}"
         edits.append((end, addition))
 
     edits.sort(key=lambda e: e[0], reverse=True)
