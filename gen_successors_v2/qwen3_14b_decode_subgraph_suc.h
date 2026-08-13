@@ -59,7 +59,7 @@ typedef struct subgraph {
     int*      pre_cnt;
     int*      pre_idx;
     int*      predecessors;
-    int* suc_cnt;
+    int* suc_cnt;·
     int* suc_idx;
     int* successors;
 } subgraph;
