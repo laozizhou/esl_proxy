@@ -91,6 +91,8 @@ def verify(path):
             "suc_cnt": arrays[var_by_field["suc_cnt"]],
             "suc_idx": arrays[var_by_field["suc_idx"]],
             "successors": arrays[var_by_field["successors"]],
+            "type": arrays[var_by_field["type"]],
+            "suc_type": arrays[var_by_field["suc_type"]],
         })
 
     group_of_id = {}
@@ -139,6 +141,22 @@ def verify(path):
             if actual != expected_c:
                 print(f"  FAIL group{g} pos{pos} (task_id={id_order[pos]}): actual={dict(actual)} expected={dict(expected_c)}")
                 mismatches += 1
+
+    # suc_type: build the expected merged type-by-position list, then check
+    # every group's suc_type_N matches it exactly (content must be identical
+    # across all groups, and equal to the owning group's own `type` value).
+    expected_type = [None] * total_task_cnt
+    for grp in groups:
+        for i, tid in enumerate(grp["task_id"]):
+            expected_type[pos_of[tid]] = grp["type"][i]
+
+    for g, grp in enumerate(groups):
+        if grp["suc_type"] != expected_type:
+            print(f"  FAIL group{g}: suc_type does not match expected merged type list")
+            for pos in range(total_task_cnt):
+                if grp["suc_type"][pos] != expected_type[pos]:
+                    print(f"    pos{pos} (task_id={id_order[pos]}): suc_type={grp['suc_type'][pos]} expected={expected_type[pos]}")
+            mismatches += 1
 
     print(f"  total_task_cnt={total_task_cnt}, expected_edges={total_expected_edges}, actual_edges_in_output={total_actual_edges}, mismatches={mismatches}")
     return mismatches == 0 and total_expected_edges == total_actual_edges

@@ -17,6 +17,13 @@ ordering of every id across all groups; this only coincides with the raw
 task_id value when ids are a contiguous 0..total_task_cnt-1 range (true of
 every real case file checked so far, but not assumed blindly here).
 
+Also emits suc_type_N[total_task_cnt]: the `type` of every task across the
+whole graph, indexed by that same position. Unlike suc_cnt/successors, its
+CONTENT is identical for every group (it's just every group's own `type`
+array merged into one, by position) - it's written out once per group under
+that group's own name (suc_type_1, suc_type_2, ...) rather than shared via
+a single pointer, purely to keep the naming symmetric with suc_cnt/successors.
+
 Same output convention as v1: writes a new file, default <input>_suc.h next
 to the input; the input is never modified.
 """
@@ -221,11 +228,17 @@ def process_file(input_path, output_path=None):
         pre_idx_type, pre_idx_vals, _ = parse_array(text, var_by_field["pre_idx"])
         pred_type, pred_vals, pred_span = parse_array(text, var_by_field["predecessors"])
         _, task_id_vals, _ = parse_array(text, var_by_field["task_id"])
+        type_type, type_vals, _ = parse_array(text, var_by_field["type"])
 
         if len(task_id_vals) != len(pre_cnt_vals):
             raise ValueError(
                 f"`{var_by_field['task_id']}` has {len(task_id_vals)} values but "
                 f"`{var_by_field['pre_cnt']}` has {len(pre_cnt_vals)} - they must match"
+            )
+        if len(task_id_vals) != len(type_vals):
+            raise ValueError(
+                f"`{var_by_field['task_id']}` has {len(task_id_vals)} values but "
+                f"`{var_by_field['type']}` has {len(type_vals)} - they must match"
             )
 
         groups.append({
@@ -233,6 +246,7 @@ def process_file(input_path, output_path=None):
             "pre_cnt": pre_cnt_vals,
             "pre_idx": pre_idx_vals,
             "predecessors": pred_vals,
+            "type": type_vals,
         })
         group_vars.append({
             "predecessors_var": var_by_field["predecessors"],
@@ -240,9 +254,16 @@ def process_file(input_path, output_path=None):
             "pre_cnt_type": pre_cnt_type,
             "pre_idx_type": pre_idx_type,
             "pred_type": pred_type,
+            "type_type": type_type,
         })
 
-    suc_cnt, suc_idx, successors, total_task_cnt, _ = compute_successors(groups)
+    suc_cnt, suc_idx, successors, total_task_cnt, id_order = compute_successors(groups)
+
+    id_to_pos = {tid: pos for pos, tid in enumerate(id_order)}
+    suc_type_vals = [None] * total_task_cnt
+    for group in groups:
+        for i, tid in enumerate(group["task_id"]):
+            suc_type_vals[id_to_pos[tid]] = group["type"][i]
 
     declared_m = TOTAL_TASK_CNT_RE.search(text)
     if declared_m and int(declared_m.group(1)) != total_task_cnt:
@@ -258,6 +279,7 @@ def process_file(input_path, output_path=None):
         suc_cnt_name = derive_name(gv["predecessors_var"], "suc_cnt")
         suc_idx_name = derive_name(gv["predecessors_var"], "suc_idx")
         successors_name = derive_name(gv["predecessors_var"], "successors")
+        suc_type_name = derive_name(gv["predecessors_var"], "suc_type")
         block = (
             f"\nstatic {gv['pre_cnt_type']} {suc_cnt_name}[{total_task_cnt}] = "
             f"{{{', '.join(str(x) for x in suc_cnt[g])}}};"
@@ -265,12 +287,15 @@ def process_file(input_path, output_path=None):
             f"{{{', '.join(str(x) for x in suc_idx[g])}}};"
             f"\nstatic {gv['pred_type']} {successors_name}[] = "
             f"{{{', '.join(str(x) for x in successors[g])}}};"
+            f"\nstatic {gv['type_type']} {suc_type_name}[{total_task_cnt}] = "
+            f"{{{', '.join(str(x) for x in suc_type_vals)}}};"
         )
         insert_pos = gv["predecessors_span"][1]
         edits.append((insert_pos, block))
         gv["suc_cnt_name"] = suc_cnt_name
         gv["suc_idx_name"] = suc_idx_name
         gv["successors_name"] = successors_name
+        gv["suc_type_name"] = suc_type_name
 
     struct_name2, fields2, struct_span = parse_struct_fields(text)
     struct_close = text.rfind("}", struct_span[0], struct_span[1])
@@ -279,11 +304,15 @@ def process_file(input_path, output_path=None):
         f"    {first['pre_cnt_type']}* suc_cnt;\n"
         f"    {first['pre_idx_type']}* suc_idx;\n"
         f"    {first['pred_type']}* successors;\n"
+        f"    {first['type_type']}* suc_type;\n"
     )
     edits.append((struct_close, struct_field_block))
 
     for (start, end), gv in zip(entries, group_vars):
-        addition = f", {gv['suc_cnt_name']}, {gv['suc_idx_name']}, {gv['successors_name']}"
+        addition = (
+            f", {gv['suc_cnt_name']}, {gv['suc_idx_name']}, "
+            f"{gv['successors_name']}, {gv['suc_type_name']}"
+        )
         edits.append((end, addition))
 
     edits.sort(key=lambda e: e[0], reverse=True)
