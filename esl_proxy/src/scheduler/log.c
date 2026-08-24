@@ -34,7 +34,11 @@ static unsigned int g_next_slot = 0;  // Next available slot for new thread
 void log_init(const char *base_filename)
 {
     // Ensure log directory exists
+#ifdef _WIN32
+    mkdir("log");
+#else
     mkdir("log", 0755);
+#endif
     
     pthread_mutex_lock(&g_log_mutex);
     

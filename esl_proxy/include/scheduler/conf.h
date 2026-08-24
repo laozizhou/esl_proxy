@@ -27,6 +27,8 @@
 #define WORKER_LOG 1
 
 /* Log output mode: 0=file, 1=stdout, 2=both */
+#ifndef LOG_OUTPUT_MODE
 #define LOG_OUTPUT_MODE 2
+#endif
 
 #endif /* SCHEDULER_CONF_H */
