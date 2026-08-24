@@ -24,9 +24,18 @@
 
 #define EARLY_NONE 0xFFFFFFFFu
 
+#ifdef EARLY_DISPATCH_MULTI_PRED
+/* Same-type predecessors of a task, stored CSR-style: task id's slice is
+ * g_early_st_flat[g_early_st_idx[id] .. g_early_st_idx[id] + g_early_st_cnt[id]).
+ * A static property of the graph: built once by early_dispatch_init(). */
+extern uint32_t g_early_st_cnt[RING_SIZE];
+extern uint32_t g_early_st_idx[RING_SIZE];
+extern uint32_t *g_early_st_flat;
+#else
 /* Unique same-type predecessor of a task, or EARLY_NONE when it does not have exactly one.
  * A static property of the graph: computed once by early_dispatch_init(). */
 extern uint32_t g_early_st_pred[RING_SIZE];
+#endif
 
 /* Keyed by the PREDECESSOR: g_early_hint[P] == S means "S is waiting only on P". Keying by P is
  * what lets dispatch consume the hint at a point where it already holds (type, core, slot), so

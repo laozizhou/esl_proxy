@@ -22,6 +22,15 @@ ifeq ($(EARLY_DISPATCH_CASE_A),1)
 CFLAGS   += -DEARLY_DISPATCH -DEARLY_DISPATCH_CASE_A
 endif
 
+# EARLY_DISPATCH_MULTI_PRED=1 generalizes the same-type-predecessor identity test from "exactly
+# one" to "one or more": early_dispatch_init() builds a CSR list of same-type predecessors per
+# task instead of a single candidate, and early_publish_hint() walks that list at the indegree==1
+# trigger instead of checking one fixed candidate. Orthogonal to EARLY_DISPATCH_CASE_A - it only
+# changes how the predecessor P is identified, not how P and S get placed on a core.
+ifeq ($(EARLY_DISPATCH_MULTI_PRED),1)
+CFLAGS   += -DEARLY_DISPATCH -DEARLY_DISPATCH_MULTI_PRED
+endif
+
 # SIM_LATENCY=1 replaces the fake return (task retires the round after it is sent) with an
 # in-order 2-slot arbiter that holds a core for SIM_TICKS rounds. Required to observe any
 # multi-round behaviour, including early dispatch. SIM_TICKS overrides the default duration.
