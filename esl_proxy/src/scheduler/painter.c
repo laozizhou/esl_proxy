@@ -13,6 +13,13 @@
 uint32_t g_early_st_cnt[RING_SIZE];
 uint32_t g_early_st_idx[RING_SIZE];
 uint32_t *g_early_st_flat;
+#ifdef EARLY_DISPATCH_CROSS_TYPE
+uint32_t g_early_ct_cnt[RING_SIZE];
+uint32_t g_early_ct_idx[RING_SIZE];
+uint32_t *g_early_ct_flat;
+uint32_t g_cross_hint[RING_SIZE];
+uint32_t g_cross_hints_published;
+#endif
 #else
 uint32_t g_early_st_pred[RING_SIZE];
 #endif
@@ -31,6 +38,9 @@ void early_dispatch_init(void)
         g_early_st_pred[i] = EARLY_NONE;
 #endif
         g_early_hint[i] = EARLY_NONE;
+#ifdef EARLY_DISPATCH_CROSS_TYPE
+        g_cross_hint[i] = EARLY_NONE;
+#endif
     }
     for (int sg = 0; sg < PAINTER_THREAD_CNT; sg++) {
         for (uint32_t i = 0; i < test_graph[sg].task_cnt; i++) {
@@ -45,20 +55,38 @@ void early_dispatch_init(void)
         }
     }
     g_early_st_flat = malloc(sizeof(uint32_t) * total_edges);
+#ifdef EARLY_DISPATCH_CROSS_TYPE
+    g_early_ct_flat = malloc(sizeof(uint32_t) * total_edges);
+#endif
 
     uint32_t flat_cursor = 0;
+#ifdef EARLY_DISPATCH_CROSS_TYPE
+    uint32_t ct_flat_cursor = 0;
+#endif
     for (int sg = 0; sg < PAINTER_THREAD_CNT; sg++) {
         for (uint32_t i = 0; i < test_graph[sg].task_cnt; i++) {
             uint32_t id = test_graph[sg].task_id[i];
             uint32_t start = flat_cursor;
+#ifdef EARLY_DISPATCH_CROSS_TYPE
+            uint32_t ct_start = ct_flat_cursor;
+#endif
             for (int k = 0; k < test_graph[sg].pre_cnt[i]; k++) {
                 uint32_t q = (uint32_t)test_graph[sg].predecessors[test_graph[sg].pre_idx[i] + k];
                 if (g_early_type[q] == g_early_type[id]) {
                     g_early_st_flat[flat_cursor++] = q;
                 }
+#ifdef EARLY_DISPATCH_CROSS_TYPE
+                else {
+                    g_early_ct_flat[ct_flat_cursor++] = q;
+                }
+#endif
             }
             g_early_st_idx[id] = start;
             g_early_st_cnt[id] = flat_cursor - start;
+#ifdef EARLY_DISPATCH_CROSS_TYPE
+            g_early_ct_idx[id] = ct_start;
+            g_early_ct_cnt[id] = ct_flat_cursor - ct_start;
+#endif
         }
     }
 #else
@@ -129,6 +157,23 @@ static inline void early_publish_hint(int tid, uint32_t s)
             return;
         }
     }
+
+#ifdef EARLY_DISPATCH_CROSS_TYPE
+    /* Same-type list came up empty, so if indegree is really 1 the survivor is cross-type. Walk
+     * g_early_ct_flat the same way and publish into g_cross_hint instead of g_early_hint. */
+    uint32_t ct_cnt = g_early_ct_cnt[s];
+    uint32_t ct_base = g_early_ct_idx[s];
+
+    for (uint32_t k = 0; k < ct_cnt; k++) {
+        uint32_t p = g_early_ct_flat[ct_base + k];
+        if (g_state_buf[tid][p].state != TASK_STATUS_COMPLETED) {
+            g_cross_hint[p] = s;
+            g_cross_hints_published++;
+            WORKER_LOGF("early,cross_hint,successor,%u,predecessor,%u", s, p);
+            return;
+        }
+    }
+#endif
 }
 #else
 /* The identity test is cheap thanks to g_early_st_pred: if S has exactly one same-type

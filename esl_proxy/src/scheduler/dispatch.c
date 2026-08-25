@@ -582,6 +582,9 @@ int early_dispatch_report(void)
     printf("[early-dispatch] plants_case_b      = %u\n", g_early_plants_b);
     printf("[early-dispatch] plants_case_a      = %u\n", g_early_plants_a);
     printf("[early-dispatch] skipped_duplicate  = %u\n", g_early_skipped_dup);
+#ifdef EARLY_DISPATCH_CROSS_TYPE
+    printf("[early-dispatch] cross_hints_published = %u\n", g_cross_hints_published);
+#endif
 
     /* Ordering oracle: a planted successor must not start before its predecessor retired. The
      * timestamps come from the simulator, which is single-writer inside the owning dispatch

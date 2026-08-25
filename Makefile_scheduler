@@ -31,6 +31,14 @@ ifeq ($(EARLY_DISPATCH_MULTI_PRED),1)
 CFLAGS   += -DEARLY_DISPATCH -DEARLY_DISPATCH_MULTI_PRED
 endif
 
+# EARLY_DISPATCH_CROSS_TYPE=1 lets early_publish_hint() fall back to a second CSR list of
+# cross-type predecessors when the same-type list comes up empty, publishing into a separate
+# g_cross_hint[] instead of g_early_hint[]. Requires EARLY_DISPATCH_MULTI_PRED - the fallback
+# walk reuses that CSR-list pattern, so it is pulled in automatically.
+ifeq ($(EARLY_DISPATCH_CROSS_TYPE),1)
+CFLAGS   += -DEARLY_DISPATCH -DEARLY_DISPATCH_MULTI_PRED -DEARLY_DISPATCH_CROSS_TYPE
+endif
+
 # SIM_LATENCY=1 replaces the fake return (task retires the round after it is sent) with an
 # in-order 2-slot arbiter that holds a core for SIM_TICKS rounds. Required to observe any
 # multi-round behaviour, including early dispatch. SIM_TICKS overrides the default duration.

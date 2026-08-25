@@ -31,6 +31,13 @@
 extern uint32_t g_early_st_cnt[RING_SIZE];
 extern uint32_t g_early_st_idx[RING_SIZE];
 extern uint32_t *g_early_st_flat;
+#ifdef EARLY_DISPATCH_CROSS_TYPE
+/* Cross-type (different-type) predecessors of a task, same CSR layout as g_early_st_*, built in
+ * the same pass over the same predecessor lists - every edge lands in exactly one of the two. */
+extern uint32_t g_early_ct_cnt[RING_SIZE];
+extern uint32_t g_early_ct_idx[RING_SIZE];
+extern uint32_t *g_early_ct_flat;
+#endif
 #else
 /* Unique same-type predecessor of a task, or EARLY_NONE when it does not have exactly one.
  * A static property of the graph: computed once by early_dispatch_init(). */
@@ -41,6 +48,13 @@ extern uint32_t g_early_st_pred[RING_SIZE];
  * what lets dispatch consume the hint at a point where it already holds (type, core, slot), so
  * the sibling slot is slot ^ 1 and no reverse task_id -> location map is needed. */
 extern uint32_t g_early_hint[RING_SIZE];
+
+#ifdef EARLY_DISPATCH_CROSS_TYPE
+/* Keyed by the PREDECESSOR, same convention as g_early_hint: g_cross_hint[P] == S means "S is
+ * waiting only on P, and P is a different type from S". Published by early_publish_hint() only
+ * when the same-type list (g_early_st_flat) came up empty at the indegree==1 trigger. */
+extern uint32_t g_cross_hint[RING_SIZE];
+#endif
 
 /* Task type by global id, needed to apply the same-type rule while building g_early_st_pred. */
 extern uint8_t g_early_type[RING_SIZE];
@@ -58,6 +72,9 @@ extern uint32_t g_early_hints_published;
 extern uint32_t g_early_plants_b;
 extern uint32_t g_early_plants_a;
 extern uint32_t g_early_skipped_dup;
+#ifdef EARLY_DISPATCH_CROSS_TYPE
+extern uint32_t g_cross_hints_published;
+#endif
 
 /* Built by painter (it owns test_graph); call once before the worker threads start. */
 void early_dispatch_init(void);
