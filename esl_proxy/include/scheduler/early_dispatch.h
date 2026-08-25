@@ -74,6 +74,8 @@ extern uint32_t g_early_plants_a;
 extern uint32_t g_early_skipped_dup;
 #ifdef EARLY_DISPATCH_CROSS_TYPE
 extern uint32_t g_cross_hints_published;
+extern uint32_t g_cross_plants_a;
+extern uint32_t g_cross_plants_b;
 #endif
 
 /* Built by painter (it owns test_graph); call once before the worker threads start. */

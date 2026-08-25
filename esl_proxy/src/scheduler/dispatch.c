@@ -24,6 +24,19 @@ uint8_t g_early_dispatched[RING_SIZE];
 uint32_t g_early_plants_b;
 uint32_t g_early_plants_a;
 uint32_t g_early_skipped_dup;
+#ifdef EARLY_DISPATCH_CROSS_TYPE
+uint32_t g_cross_plants_a;
+uint32_t g_cross_plants_b;
+
+/* The cross-type notify wait (waiting_notify/g_cross_notify, see sim_tick()) only exists under
+ * the SIM_LATENCY arbiter. Without it, place_task()'s fake-return path marks a task complete the
+ * round after it is sent regardless of needs_notify, so a cross-type S would "finish" without
+ * ever actually waiting for P - silently wrong, not just untested. REAL_CHIP has no notify wiring
+ * yet either (see cross_dispatch.md future work), so it is excluded the same way. */
+#if !(defined(SIM_LATENCY) && !defined(REAL_CHIP))
+#error "EARLY_DISPATCH_CROSS_TYPE requires SIM_LATENCY and no REAL_CHIP"
+#endif
+#endif
 
 /* Planted pairs, kept so early_dispatch_report() can assert start(S) >= retire(P). The bound is
  * generous: the qwen3 DAG admits at most 6 plants (doc/early-dispatch-case-b.md section 10). */
@@ -367,8 +380,13 @@ static inline void push_2_completed_queue(int tid)
 
 /* Single placement primitive: write the task into (type, core, slot), record the reverse map used
  * to translate completion bits back into task ids, and mark the slot busy. Shared by the normal
- * ready path and by early dispatch so the two cannot drift apart. */
-static inline void place_task(ctrl_t *ctrl, int type, int core, int slot, uint32_t task_id)
+ * ready path and by early dispatch so the two cannot drift apart.
+ *
+ * needs_notify is forwarded to sim_place() unchanged: true only for a cross-type S placed onto an
+ * idle destination, false for everything else (P, and every same-type placement). See sim_tick.md
+ * for what the flag does once the task is resident. */
+static inline void place_task(ctrl_t *ctrl, int type, int core, int slot, uint32_t task_id,
+                               bool needs_notify)
 {
     uint64_t mask = (uint64_t)0x1 << core;
 
@@ -389,7 +407,7 @@ static inline void place_task(ctrl_t *ctrl, int type, int core, int slot, uint32
 
     #ifndef REAL_CHIP
     #ifdef SIM_LATENCY
-    sim_place((int)ctrl->tid, type, core, slot, task_id, false);
+    sim_place((int)ctrl->tid, type, core, slot, task_id, needs_notify);
     #else
     ctrl->msg_bitmap[type][slot] |= mask;   /* fake return: retires next round */
     #endif
@@ -426,23 +444,58 @@ static int plant_pass(int tid)
             int free_slot = (ctrl->free_bitmap[type][0] & mask) != 0 ? 0 : 1;
             uint32_t p = free_slot == 1 ? ctrl->task_id_map1[type][idx]
                                         : ctrl->task_id_map2[type][idx];
+
             uint32_t s = g_early_hint[p];
-            if (s == EARLY_NONE) {
-                continue;
+            if (s != EARLY_NONE) {
+                /* Consume the hint whether or not the plant happens, so a stale hint cannot be
+                 * retried forever against a predecessor that has since retired. Always safe to
+                 * consume here: with the sibling slot already free, the only way to fail is a
+                 * stale duplicate, never "try again next round". */
+                g_early_hint[p] = EARLY_NONE;
+                if (g_early_dispatched[s]) {
+                    g_early_skipped_dup++;
+                } else {
+                    place_task(ctrl, type, (int)idx, free_slot, s, false);
+                    early_record_plant(p, s);
+                    g_early_plants_b++;
+                    planted++;
+                    WORKER_LOGF("early,plant_b,successor,%u,predecessor,%u,core,%d,slot,%d",
+                                s, p, (int)idx, free_slot);
+                }
             }
-            /* Consume the hint whether or not the plant happens, so a stale hint cannot be
-             * retried forever against a predecessor that has since retired. */
-            g_early_hint[p] = EARLY_NONE;
-            if (g_early_dispatched[s]) {
-                g_early_skipped_dup++;
-                continue;
+
+#ifdef EARLY_DISPATCH_CROSS_TYPE
+            /* P has nothing ahead of it on its own core (same "exactly one busy slot" proof as
+             * above), so a pending cross-type successor is safe to place the instant its
+             * destination - the paired core, same index, opposite type - is fully idle. Same-type
+             * and cross-type hints are independent (two different successors can each have P as
+             * their last predecessor), so this never branches off the outcome above.
+             *
+             * Unlike the same-type hint, this one is NOT consumed on a failed destination check:
+             * "destination busy right now" is not "stale", and P stays the sole occupant of its
+             * own core across rounds until it retires, so plant_pass will simply see this same
+             * (p, cs) pair again next round and can still succeed once the destination frees up. */
+            uint32_t cs = g_cross_hint[p];
+            if (cs != EARLY_NONE) {
+                if (g_early_dispatched[cs]) {
+                    g_cross_hint[p] = EARLY_NONE;
+                    g_early_skipped_dup++;
+                } else {
+                    int ctype = type ^ 1;
+                    bool dest_idle = (ctrl->free_bitmap[ctype][0] & mask) != 0
+                                   && (ctrl->free_bitmap[ctype][1] & mask) != 0;
+                    if (dest_idle) {
+                        g_cross_hint[p] = EARLY_NONE;
+                        place_task(ctrl, ctype, (int)idx, 0, cs, true);
+                        early_record_plant(p, cs);
+                        g_cross_plants_b++;
+                        planted++;
+                        WORKER_LOGF("early,cross_plant_b,successor,%u,predecessor,%u,core,%d,"
+                                    "type,%d", cs, p, (int)idx, ctype);
+                    }
+                }
             }
-            place_task(ctrl, type, (int)idx, free_slot, s);
-            early_record_plant(p, s);
-            g_early_plants_b++;
-            planted++;
-            WORKER_LOGF("early,plant_b,successor,%u,predecessor,%u,core,%d,slot,%d",
-                        s, p, (int)idx, free_slot);
+#endif
         }
     }
     return planted;
@@ -513,6 +566,10 @@ static inline int send_task(ctrl_t *ctrl, int type)
          * with a slot-0 preference above, a fully idle core always yields slot == 0 here. */
         int idle = (ctrl->free_bitmap[type][0] & mask) != 0 && (ctrl->free_bitmap[type][1] & mask) != 0;
         uint32_t hint_s = EARLY_NONE;
+#ifdef EARLY_DISPATCH_CROSS_TYPE
+        uint32_t cross_hint_s = EARLY_NONE;
+        int ctype = type ^ 1;
+#endif
         if (idle && slot == 0) {
             hint_s = g_early_hint[task_id];
             if (hint_s != EARLY_NONE) {
@@ -522,10 +579,30 @@ static inline int send_task(ctrl_t *ctrl, int type)
                     hint_s = EARLY_NONE;
                 }
             }
+#ifdef EARLY_DISPATCH_CROSS_TYPE
+            /* Independent of hint_s above - task_id can have both a same-type and a cross-type
+             * successor waiting on it at once (two different successors), so this is not an
+             * else-branch. Unlike hint_s, this one is NOT consumed when the destination - the
+             * paired core, same index, opposite type - happens not to be idle right now: that is
+             * not "stale", and once task_id is placed below it becomes the sole occupant of its
+             * own core (this is the idle-core path), so plant_pass's persistent scan will see the
+             * same (task_id, cross_hint_s) pair again next round and can still succeed later. */
+            uint32_t cs = g_cross_hint[task_id];
+            if (cs != EARLY_NONE) {
+                if (g_early_dispatched[cs]) {
+                    g_cross_hint[task_id] = EARLY_NONE;
+                    g_early_skipped_dup++;
+                } else if ((ctrl->free_bitmap[ctype][0] & mask) != 0
+                           && (ctrl->free_bitmap[ctype][1] & mask) != 0) {
+                    g_cross_hint[task_id] = EARLY_NONE;
+                    cross_hint_s = cs;
+                }
+            }
+#endif
         }
 #endif
 
-        place_task(ctrl, type, core, slot, task_id);
+        place_task(ctrl, type, core, slot, task_id, false);
 
         WORKER_LOGF("send,task_id,%u,core,%d,slot,%d,type,%d", task_id, core, slot, type);
         sent++;
@@ -534,12 +611,23 @@ static inline int send_task(ctrl_t *ctrl, int type)
         if (hint_s != EARLY_NONE) {
             /* Second write, higher slot, after the predecessor's - the order matters and under
              * REAL_CHIP these are MMIO stores that must not be reordered. */
-            place_task(ctrl, type, core, 1, hint_s);
+            place_task(ctrl, type, core, 1, hint_s, false);
             early_record_plant(task_id, hint_s);
             g_early_plants_a++;
             WORKER_LOGF("early,plant_a,successor,%u,predecessor,%u,core,%d,slot,1",
                         hint_s, task_id, core);
         }
+#ifdef EARLY_DISPATCH_CROSS_TYPE
+        if (cross_hint_s != EARLY_NONE) {
+            /* A different (type, core) from task_id's - slot 0, since the destination is fully
+             * idle and this is the sole occupant, same convention as the idle-core path above. */
+            place_task(ctrl, ctype, core, 0, cross_hint_s, true);
+            early_record_plant(task_id, cross_hint_s);
+            g_cross_plants_a++;
+            WORKER_LOGF("early,cross_plant_a,successor,%u,predecessor,%u,core,%d,type,%d",
+                        cross_hint_s, task_id, core, ctype);
+        }
+#endif
 #endif
         free_bitmap &= ~mask;
     }
@@ -584,6 +672,8 @@ int early_dispatch_report(void)
     printf("[early-dispatch] skipped_duplicate  = %u\n", g_early_skipped_dup);
 #ifdef EARLY_DISPATCH_CROSS_TYPE
     printf("[early-dispatch] cross_hints_published = %u\n", g_cross_hints_published);
+    printf("[early-dispatch] cross_plants_a     = %u\n", g_cross_plants_a);
+    printf("[early-dispatch] cross_plants_b     = %u\n", g_cross_plants_b);
 #endif
 
     /* Ordering oracle: a planted successor must not start before its predecessor retired. The
