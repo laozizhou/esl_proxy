@@ -198,24 +198,44 @@ typedef struct {
     uint16_t remaining;
     uint8_t occupied;
     uint8_t started;
+    uint8_t waiting_notify;   /* cross-type early dispatch: occupied but held until the paired unit signals */
 } sim_slot_t;
 
 static sim_slot_t g_sim[DISPATCH_THREAD_CNT][EXE_TYPE_CNT][AIC_CNT][AIC_OSTD];
 static uint8_t g_sim_next[DISPATCH_THREAD_CNT][EXE_TYPE_CNT][AIC_CNT];
 static uint64_t g_sim_now[DISPATCH_THREAD_CNT];
 
+/* Cross-type completion mailbox, 1:1 cube<->vector pairing (core i of one type pairs with core i
+ * of the other; EXE_TYPE_CNT==2 so type^1 is always the paired type). g_cross_notify[tid][type][core]
+ * is a mailbox addressed TO (type, core): the OTHER type's retiring slot writes 1 here, this slot
+ * reads and clears it. Unconditional on the writer's side - the writer cannot know whether anyone
+ * is waiting, so it always posts even when nothing is listening; staleness is prevented by
+ * clearing this same mailbox in sim_place() the moment a wait begins, not by anything in
+ * sim_tick() - a "clear when I start" rule would be too late, since a mailbox belonging to a
+ * (type, core) that has never run anything yet can already read 1 from unrelated past traffic
+ * on the paired unit. */
+static uint8_t g_cross_notify[DISPATCH_THREAD_CNT][EXE_TYPE_CNT][AIC_CNT];
+
 /* Ordering oracle. Written only by the simulator, i.e. only by the owning dispatch thread, so
  * an assertion over these is sound where reading g_state_buf would be racy and lagging. */
 uint64_t g_sim_start[RING_SIZE];
 uint64_t g_sim_retire[RING_SIZE];
 
-static inline void sim_place(int tid, int type, int core, int slot, uint32_t task_id)
+static inline void sim_place(int tid, int type, int core, int slot, uint32_t task_id, bool needs_notify)
 {
     sim_slot_t *s = &g_sim[tid][type][core][slot];
     s->task_id = task_id;
     s->remaining = SIM_TICKS;
     s->occupied = 1;
     s->started = 0;
+    s->waiting_notify = needs_notify ? 1 : 0;
+    if (needs_notify) {
+        /* Discard any stale mailbox entry accumulated before this wait began - the paired unit
+         * posts unconditionally on every retirement, whether or not anyone is listening, so this
+         * mailbox may already read 1 from unrelated past traffic even if this (type, core) has
+         * never run anything before. */
+        g_cross_notify[tid][type][core] = 0;
+    }
 }
 
 static void sim_tick(int tid)
@@ -230,6 +250,20 @@ static void sim_tick(int tid)
                 g_sim_next[tid][type][core] = 0; /* idle resets the phase pointer */
                 continue;
             }
+
+            /* Cross-type early dispatch: held here until the paired unit's mailbox says its
+             * predecessor retired. Neither ticked nor marked started while waiting - see the
+             * struct comment on g_cross_notify for why the check is unconditional and safe.
+             * The mailbox itself is not re-cleared here: sim_place() already cleared it the
+             * moment this wait began, so a stale re-read is not possible, and this task never
+             * checks it again once unblocked. */
+            if (s[run].waiting_notify) {
+                if (g_cross_notify[tid][type][core]) {
+                    s[run].waiting_notify = 0;
+                }
+                continue;
+            }
+
             if (!s[run].started) {
                 s[run].started = 1;
                 g_sim_start[s[run].task_id] = g_sim_now[tid];
@@ -239,6 +273,7 @@ static void sim_tick(int tid)
                 s[run].occupied = 0;
                 s[run].started = 0;
                 g_ctrl_t[tid].msg_bitmap[type][run] |= (uint64_t)0x1 << core;
+                g_cross_notify[tid][type ^ 1][core] = 1; /* post to the paired unit's mailbox, unconditionally */
                 g_sim_next[tid][type][core] = run ^ 1; /* examine the sibling next */
                 if (!s[0].occupied && !s[1].occupied) {
                     /* That retirement emptied the core, so the phase pointer resets to slot 0 NOW,
@@ -354,7 +389,7 @@ static inline void place_task(ctrl_t *ctrl, int type, int core, int slot, uint32
 
     #ifndef REAL_CHIP
     #ifdef SIM_LATENCY
-    sim_place((int)ctrl->tid, type, core, slot, task_id);
+    sim_place((int)ctrl->tid, type, core, slot, task_id, false);
     #else
     ctrl->msg_bitmap[type][slot] |= mask;   /* fake return: retires next round */
     #endif
