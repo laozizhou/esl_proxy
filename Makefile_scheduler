@@ -12,21 +12,21 @@ CFLAGS   := -g -std=c11 -Wall -O2 \
             -D_GNU_SOURCE \
             -DWORKER_LOG=1 -DLOG_OUTPUT_MODE=0
 
-# EARLY_DISPATCH=1 enables Case B (plant a successor behind an already-executing predecessor).
-# EARLY_DISPATCH_CASE_A=1 additionally enables Case A (co-dispatch onto a fully idle core).
-# Both off by default, so the baseline is reachable for comparison and as a negative control.
+# EARLY_DISPATCH=1 enables early dispatch: plant_pass() scans every core holding exactly one
+# task and, if that task has a pending hint, plants the waiting successor into the free sibling
+# slot (same type) or the paired core (cross type, see EARLY_DISPATCH_CROSS_TYPE). Called after
+# all three send_task() calls each round, so it only ever claims what ready_queue did not want -
+# a predecessor freshly placed onto a fully-idle core this same round is already just another
+# "exactly one busy slot" candidate by the time it runs, no separate co-dispatch path needed.
+# Off by default, so the baseline is reachable for comparison and as a negative control.
 ifeq ($(EARLY_DISPATCH),1)
 CFLAGS   += -DEARLY_DISPATCH
-endif
-ifeq ($(EARLY_DISPATCH_CASE_A),1)
-CFLAGS   += -DEARLY_DISPATCH -DEARLY_DISPATCH_CASE_A
 endif
 
 # EARLY_DISPATCH_MULTI_PRED=1 generalizes the same-type-predecessor identity test from "exactly
 # one" to "one or more": early_dispatch_init() builds a CSR list of same-type predecessors per
 # task instead of a single candidate, and early_publish_hint() walks that list at the indegree==1
-# trigger instead of checking one fixed candidate. Orthogonal to EARLY_DISPATCH_CASE_A - it only
-# changes how the predecessor P is identified, not how P and S get placed on a core.
+# trigger instead of checking one fixed candidate.
 ifeq ($(EARLY_DISPATCH_MULTI_PRED),1)
 CFLAGS   += -DEARLY_DISPATCH -DEARLY_DISPATCH_MULTI_PRED
 endif

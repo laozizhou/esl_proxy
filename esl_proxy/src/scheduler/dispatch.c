@@ -21,12 +21,10 @@ ctrl_t g_ctrl_t[DISPATCH_THREAD_CNT];
  * Kept live even when EARLY_DISPATCH is off so that "every task is dispatched exactly once" can
  * be asserted identically in both configurations. */
 uint8_t g_early_dispatched[RING_SIZE];
-uint32_t g_early_plants_b;
-uint32_t g_early_plants_a;
+uint32_t g_early_plants;
 uint32_t g_early_skipped_dup;
 #ifdef EARLY_DISPATCH_CROSS_TYPE
-uint32_t g_cross_plants_a;
-uint32_t g_cross_plants_b;
+uint32_t g_cross_plants;
 
 /* The cross-type notify wait (waiting_notify/g_cross_notify, see sim_tick()) only exists under
  * the SIM_LATENCY arbiter. Without it, place_task()'s fake-return path marks a task complete the
@@ -38,8 +36,10 @@ uint32_t g_cross_plants_b;
 #endif
 #endif
 
-/* Planted pairs, kept so early_dispatch_report() can assert start(S) >= retire(P). The bound is
- * generous: the qwen3 DAG admits at most 6 plants (doc/early-dispatch-case-b.md section 10). */
+/* Planted pairs, kept so early_dispatch_report() can assert start(S) >= retire(P). Same-type-only
+ * runs stay in the single digits (doc/early-dispatch-case-b.md section 10), but cross-type plants
+ * on the qwen3 DAG have been observed in the 200-300 range per run - keep this comfortably above
+ * that, not just above the same-type figure. */
 #define EARLY_MAX_PLANTS 512
 static uint32_t g_early_pair[EARLY_MAX_PLANTS][2];
 static int g_early_pair_n;
@@ -415,19 +415,16 @@ static inline void place_task(ctrl_t *ctrl, int type, int core, int slot, uint32
 }
 
 #ifdef EARLY_DISPATCH
-/* Case B: for every core holding exactly one task, if that task has a pending hint, plant the
- * waiting successor into the free sibling slot.
+/* For every core holding exactly one task, if that task has a pending hint, plant the waiting
+ * successor into the free sibling slot (same type) or onto the paired core (cross type).
  *
- * Called from dispatch() after read_msgq() and after push_2_completed_queue(), and that position
- * is load-bearing in both directions. After read_msgq() so free_bitmap reflects this round's
- * completions, and after push_2_completed_queue() because place_task() overwrites the task_id_map
- * entry for the slot it fills while push_2_completed_queue() still needs that entry to translate
- * this round's completion bits back into task ids.
+ * Called from dispatch() after read_msgq(), after push_2_completed_queue(), and after all three
+ * send_task() calls - see the ordering comment on dispatch() for why each position is load-bearing.
  *
  * "Exactly one busy slot" is the observable proxy for "the resident task is executing": with an
- * in-order slot pair, a core holding a single task has nothing ahead of it. When that task
- * retires the sibling slot holds exactly one candidate, so no arbitration rule can reorder them -
- * which is why Case B needs only non-preemption and not the idle-core slot-order property. */
+ * in-order slot pair, a core holding a single task has nothing ahead of it, so no arbitration rule
+ * can let anything else retire before it - this holds regardless of how that task got there,
+ * whether freshly placed this same round or resident for many rounds already. */
 static int plant_pass(int tid)
 {
     ctrl_t *ctrl = &g_ctrl_t[tid];
@@ -457,9 +454,9 @@ static int plant_pass(int tid)
                 } else {
                     place_task(ctrl, type, (int)idx, free_slot, s, false);
                     early_record_plant(p, s);
-                    g_early_plants_b++;
+                    g_early_plants++;
                     planted++;
-                    WORKER_LOGF("early,plant_b,successor,%u,predecessor,%u,core,%d,slot,%d",
+                    WORKER_LOGF("early,plant,successor,%u,predecessor,%u,core,%d,slot,%d",
                                 s, p, (int)idx, free_slot);
                 }
             }
@@ -488,9 +485,9 @@ static int plant_pass(int tid)
                         g_cross_hint[p] = EARLY_NONE;
                         place_task(ctrl, ctype, (int)idx, 0, cs, true);
                         early_record_plant(p, cs);
-                        g_cross_plants_b++;
+                        g_cross_plants++;
                         planted++;
-                        WORKER_LOGF("early,cross_plant_b,successor,%u,predecessor,%u,core,%d,"
+                        WORKER_LOGF("early,cross_plant,successor,%u,predecessor,%u,core,%d,"
                                     "type,%d", cs, p, (int)idx, ctype);
                     }
                 }
@@ -546,89 +543,14 @@ static inline int send_task(ctrl_t *ctrl, int type)
         /* Prefer slot 0. This is load-bearing, not cosmetic: on an idle core the AICore examines
          * slot 0 first, so filling slot 0 before slot 1 makes the software fill order agree with
          * the hardware pickup order, and a task queued behind a resident one always lands in the
-         * higher slot. Early dispatch Case A depends on the predecessor occupying the lower slot. */
+         * higher slot. */
         int slot = (ctrl->free_bitmap[type][0] & mask) != 0 ? 0 : 1;
         int core = (int)idx;
-
-#ifdef EARLY_DISPATCH_CASE_A
-        /* Case A: this task is about to be placed, and if the core is FULLY idle its sibling slot
-         * is free too, so a successor waiting only on this task can ride along in the same round.
-         *
-         * Readiness of the predecessor is implied by construction here - it came out of
-         * ready_queue, so its indegree is 0. That is the whole reason the hint is consumed at this
-         * point rather than re-derived: "not yet dispatched" is NOT the same as "ready" (in chain
-         * X -> A -> B with X unfinished, both A and B have one unfinished predecessor and A is
-         * undispatched, but A must not run yet).
-         *
-         * Ordering rests on the predecessor taking the LOWER slot: an idle core examines slot 0
-         * first, so writing P to slot 0 and S to slot 1 is correct both under a phase pointer that
-         * resets to 0 on idle and under a plain lowest-index-first arbiter. Since slot is chosen
-         * with a slot-0 preference above, a fully idle core always yields slot == 0 here. */
-        int idle = (ctrl->free_bitmap[type][0] & mask) != 0 && (ctrl->free_bitmap[type][1] & mask) != 0;
-        uint32_t hint_s = EARLY_NONE;
-#ifdef EARLY_DISPATCH_CROSS_TYPE
-        uint32_t cross_hint_s = EARLY_NONE;
-        int ctype = type ^ 1;
-#endif
-        if (idle && slot == 0) {
-            hint_s = g_early_hint[task_id];
-            if (hint_s != EARLY_NONE) {
-                g_early_hint[task_id] = EARLY_NONE;   /* consume once, win or lose */
-                if (g_early_dispatched[hint_s]) {
-                    g_early_skipped_dup++;
-                    hint_s = EARLY_NONE;
-                }
-            }
-#ifdef EARLY_DISPATCH_CROSS_TYPE
-            /* Independent of hint_s above - task_id can have both a same-type and a cross-type
-             * successor waiting on it at once (two different successors), so this is not an
-             * else-branch. Unlike hint_s, this one is NOT consumed when the destination - the
-             * paired core, same index, opposite type - happens not to be idle right now: that is
-             * not "stale", and once task_id is placed below it becomes the sole occupant of its
-             * own core (this is the idle-core path), so plant_pass's persistent scan will see the
-             * same (task_id, cross_hint_s) pair again next round and can still succeed later. */
-            uint32_t cs = g_cross_hint[task_id];
-            if (cs != EARLY_NONE) {
-                if (g_early_dispatched[cs]) {
-                    g_cross_hint[task_id] = EARLY_NONE;
-                    g_early_skipped_dup++;
-                } else if ((ctrl->free_bitmap[ctype][0] & mask) != 0
-                           && (ctrl->free_bitmap[ctype][1] & mask) != 0) {
-                    g_cross_hint[task_id] = EARLY_NONE;
-                    cross_hint_s = cs;
-                }
-            }
-#endif
-        }
-#endif
 
         place_task(ctrl, type, core, slot, task_id, false);
 
         WORKER_LOGF("send,task_id,%u,core,%d,slot,%d,type,%d", task_id, core, slot, type);
         sent++;
-
-#ifdef EARLY_DISPATCH_CASE_A
-        if (hint_s != EARLY_NONE) {
-            /* Second write, higher slot, after the predecessor's - the order matters and under
-             * REAL_CHIP these are MMIO stores that must not be reordered. */
-            place_task(ctrl, type, core, 1, hint_s, false);
-            early_record_plant(task_id, hint_s);
-            g_early_plants_a++;
-            WORKER_LOGF("early,plant_a,successor,%u,predecessor,%u,core,%d,slot,1",
-                        hint_s, task_id, core);
-        }
-#ifdef EARLY_DISPATCH_CROSS_TYPE
-        if (cross_hint_s != EARLY_NONE) {
-            /* A different (type, core) from task_id's - slot 0, since the destination is fully
-             * idle and this is the sole occupant, same convention as the idle-core path above. */
-            place_task(ctrl, ctype, core, 0, cross_hint_s, true);
-            early_record_plant(task_id, cross_hint_s);
-            g_cross_plants_a++;
-            WORKER_LOGF("early,cross_plant_a,successor,%u,predecessor,%u,core,%d,type,%d",
-                        cross_hint_s, task_id, core, ctype);
-        }
-#endif
-#endif
         free_bitmap &= ~mask;
     }
     return sent;
@@ -648,33 +570,31 @@ int early_dispatch_report(void)
         }
     }
 
-    printf("\n[early-dispatch] mode=%s%s latency=%s\n",
+    printf("\n[early-dispatch] latency=%s early_dispatch=%s cross_type=%s\n",
+#if defined(SIM_LATENCY) && !defined(REAL_CHIP)
+           "sim",
+#else
+           "fake-return",
+#endif
 #ifdef EARLY_DISPATCH
            "on",
 #else
            "off",
 #endif
-#ifdef EARLY_DISPATCH_CASE_A
-           "+caseA",
+#ifdef EARLY_DISPATCH_CROSS_TYPE
+           "on"
 #else
-           "",
-#endif
-#if defined(SIM_LATENCY) && !defined(REAL_CHIP)
-           "sim"
-#else
-           "fake-return"
+           "off"
 #endif
     );
-    printf("[early-dispatch] dispatched_tasks   = %u\n", dispatched);
-    printf("[early-dispatch] hints_published    = %u\n", g_early_hints_published);
-    printf("[early-dispatch] plants_case_b      = %u\n", g_early_plants_b);
-    printf("[early-dispatch] plants_case_a      = %u\n", g_early_plants_a);
-    printf("[early-dispatch] skipped_duplicate  = %u\n", g_early_skipped_dup);
+    printf("[early-dispatch] dispatched_tasks         = %u\n", dispatched);
+    printf("[early-dispatch] same_type_hints_published = %u\n", g_early_hints_published);
+    printf("[early-dispatch] same_type_plants          = %u\n", g_early_plants);
 #ifdef EARLY_DISPATCH_CROSS_TYPE
-    printf("[early-dispatch] cross_hints_published = %u\n", g_cross_hints_published);
-    printf("[early-dispatch] cross_plants_a     = %u\n", g_cross_plants_a);
-    printf("[early-dispatch] cross_plants_b     = %u\n", g_cross_plants_b);
+    printf("[early-dispatch] cross_type_hints_published = %u\n", g_cross_hints_published);
+    printf("[early-dispatch] cross_type_plants          = %u\n", g_cross_plants);
 #endif
+    printf("[early-dispatch] skipped_duplicate         = %u\n", g_early_skipped_dup);
 
     /* Ordering oracle: a planted successor must not start before its predecessor retired. The
      * timestamps come from the simulator, which is single-writer inside the owning dispatch
@@ -714,18 +634,28 @@ int dispatch(int tid)
 #endif
     read_msgq(tid);
     push_2_completed_queue(tid);
-#ifdef EARLY_DISPATCH
-    /* AFTER push_2_completed_queue(), and that ordering is load-bearing. place_task() overwrites
-     * task_id_map for the slot it fills, and push_2_completed_queue() reads that same map to turn
-     * completion bits back into task ids. Planting first therefore made a retiring task's
-     * completion be reported under the PLANTED id: the real task was never reported complete and
-     * the DAG hung, while the planted task was reported complete before it had run. Once
-     * completions are drained the map entry for a freed slot is dead and safe to overwrite. */
-    plant_pass(tid);
-#endif
     total_sent += send_task(&g_ctrl_t[tid], TASK_TYPE_MIX);
     total_sent += send_task(&g_ctrl_t[tid], TASK_TYPE_VECTOR);
     total_sent += send_task(&g_ctrl_t[tid], TASK_TYPE_CUBE);
+#ifdef EARLY_DISPATCH
+    /* AFTER push_2_completed_queue() (place_task() overwrites task_id_map for the slot it fills,
+     * and push_2_completed_queue() reads that same map to turn this round's completion bits back
+     * into task ids - planting first would make a retiring task's completion get reported under
+     * the PLANTED id instead).
+     *
+     * AFTER all three send_task() calls too, and that ordering is now equally load-bearing: a
+     * core showing "exactly one busy slot" is also the state a genuinely-ready task from
+     * ready_queue can claim (send_task() admits a core whenever EITHER slot is free). Scanning
+     * before send_task() would let an early plant win that race even when a real, immediately-
+     * runnable ready_queue task of the same type was waiting for the very same slot - a real cost
+     * (the ready_queue task sits idle for nothing) traded for a speculative gain (the planted
+     * successor still has to wait on its predecessor regardless). Running the scan last means
+     * early dispatch only ever claims what genuine demand did not want this round. This also means
+     * a predecessor freshly placed by send_task() onto a fully-idle core is already sitting there
+     * as a plain "exactly one busy slot" core by the time this runs, so plant_pass() catches the
+     * co-dispatch case on its own - no separate placed-together code path is needed. */
+    plant_pass(tid);
+#endif
     return total_sent;
 }
 

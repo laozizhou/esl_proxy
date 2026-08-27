@@ -69,13 +69,11 @@ extern uint8_t g_early_dispatched[RING_SIZE];
  * WORKER_LOGF: that is silenced by SCHEDULER_LOG=0, which is the documented performance mode, so
  * otherwise "the feature fired" and "here is the timing" could never come from the same run. */
 extern uint32_t g_early_hints_published;
-extern uint32_t g_early_plants_b;
-extern uint32_t g_early_plants_a;
+extern uint32_t g_early_plants;
 extern uint32_t g_early_skipped_dup;
 #ifdef EARLY_DISPATCH_CROSS_TYPE
 extern uint32_t g_cross_hints_published;
-extern uint32_t g_cross_plants_a;
-extern uint32_t g_cross_plants_b;
+extern uint32_t g_cross_plants;
 #endif
 
 /* Built by painter (it owns test_graph); call once before the worker threads start. */
