@@ -1,4 +1,4 @@
-# 跨类型早发调度：sim_tick 扩展（commit 1/2）
+# 跨类型早发调度：sim_tick 扩展
 
 分支：`dev/early-dispatch-cpu-free`
 

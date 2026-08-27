@@ -1,4 +1,4 @@
-# 跨类型早发调度：dispatch 侧消费（commit 3）
+# 跨类型早发调度：dispatch 侧消费
 
 分支：`dev/early-dispatch-cpu-free`
 

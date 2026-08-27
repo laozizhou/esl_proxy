@@ -1,4 +1,4 @@
-# 跨类型早发调度：painter 侧 hint 发布（commit 2）
+# 跨类型早发调度：painter 侧 hint 发布
 
 分支：`dev/early-dispatch-cpu-free`
 
