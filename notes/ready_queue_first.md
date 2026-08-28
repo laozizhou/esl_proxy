@@ -36,7 +36,24 @@ CUBE`），跨类型 Case A 内联在 `send_task` 里，处理 VECTOR 的时候�
   `ordering_pairs` 依然 `0 failed`、且 `plants + cross_plants` 的总数变化
   符合预期（见 §4），才真正把 Case A 的代码和开关整段删掉。
 
-## 3. 具体改动（`src/scheduler/dispatch.c`、`Makefile_scheduler`）
+## 3. 现在覆盖的两种情况
+
+Case A/B 合一之后，早发只剩两种情况，靠同一次扫描（`plant_pass` 检查
+"P 是不是所在核上唯一的占用者"）触发，不再区分"P 刚下发"还是"P 已经跑
+了很久"：
+
+- **同类型**：占着核的 P 有一个同类型 successor S 在等它（`g_early_hint`，
+  或 `MULTI_PRED` 下 CSR 列表里唯一未完成的那个）——S 直接种进 P 的兄弟
+  槽，靠仲裁器的非抢占性保证顺序，不需要额外通知。
+- **跨类型**：successor S 是跨类型的（`g_cross_hint`），多查一步：P 配
+  对的那个核（1:1 假设下，`type^1`、同核编号）是不是完全空闲，空闲才把
+  S 放上去，靠 `sim_place`/`sim_tick` 那套主动通知机制（`waiting_notify`/
+  `g_cross_notify`）等 P 退休后被唤醒。
+
+这次扫描本身排在三次 `send_task` 之后，保证两种情况都不会抢在当轮真实的
+`ready_queue` 需求前面。
+
+## 4. 具体改动（`src/scheduler/dispatch.c`、`Makefile_scheduler`）
 
 - `dispatch()`（[dispatch.c:627](esl_proxy/src/scheduler/dispatch.c#L627)）：
   `plant_pass(tid)` 从三次 `send_task` 之前挪到之后（[:657](esl_proxy/src/scheduler/dispatch.c#L657)）。
@@ -60,7 +77,7 @@ CUBE`），跨类型 Case A 内联在 `send_task` 里，处理 VECTOR 的时候�
   `latency → early_dispatch → cross_type` 打头，`skipped_duplicate` 挪到
   `cross_type_plants` 后面。
 
-## 4. 效果验证
+## 5. 效果验证
 
 `make -f Makefile_scheduler run EARLY_DISPATCH_CROSS_TYPE=1 SIM_LATENCY=1
 SIM_TICKS=4` 跑了几十次，`ordering_pairs` 全程 `0 failed`，正确性没受任
