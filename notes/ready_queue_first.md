@@ -53,6 +53,71 @@ Case A/B 合一之后，早发只剩两种情况，靠同一次扫描（`plant_p
 这次扫描本身排在三次 `send_task` 之后，保证两种情况都不会抢在当轮真实的
 `ready_queue` 需求前面。
 
+### 完整流程
+
+```text
+【初始化】early_dispatch_init()          启动时跑一次，工作线程之前
+────────────────────────────────────────────────────────────────
+  遍历全图两遍：
+    第一遍 → g_early_type[id]              每个 task 的类型（必须先填完）
+    第二遍 → g_early_st_cnt/idx/flat[]     同类型前驱（CSR）
+           → g_early_ct_cnt/idx/flat[]     跨类型前驱（CSR）
+             每条边按「前驱类型 == 自己类型」二选一，不重不漏
+  g_early_hint[] / g_cross_hint[]  全部清成 EARLY_NONE
+                        │
+                        ▼
+【painter】early_publish_hint(S)         触发点：S 的未完成前驱数降到 1
+────────────────────────────────────────────────────────────────
+  两个触发位置（缺一不可）：
+    · resolve_dep()      前驱完成 → 入度-- → == 1
+    · add_successors()   提交时入度就是 1（纯链式，永不「跳变到 1」）
+                        │
+                        ▼
+  遍历 S 的同类型前驱列表，找第一个未完成的
+    找到 P  ──────────→ g_early_hint[P] = S   然后 return
+    一个都没有 ────────→ 遍历跨类型前驱列表，找第一个未完成的
+                          找到 P → g_cross_hint[P] = S
+
+  为什么遍历一次就够：入度==1 ⟹ 任意子集里未完成的最多 1 个
+  为什么两个列表互斥：唯一的幸存者要么同类型、要么跨类型
+                        │
+                        ▼
+【dispatch】plant_pass(tid)              每轮一次，位置见 §2
+────────────────────────────────────────────────────────────────
+  sim_tick → read_msgq → push_2_completed_queue
+           → send_task×3        ← ready_queue 先拿
+           → plant_pass         ← 早发只捡剩下的
+                        │
+                        ▼
+  候选核 = free_bitmap[type][0] ^ free_bitmap[type][1]
+           （异或 = 恰好一个槽忙 = 占用者前面没东西挡着）
+                        │
+                        ▼
+  从忙槽的 task_id_map 取出占用者 P
+                        │
+        ┌───────────────┴───────────────┐
+        ▼                               ▼
+  ── 同类型分支 ──                ── 跨类型分支 ──   （并列的 if，不是 else）
+  s = g_early_hint[P]             cs = g_cross_hint[P]
+  有值？                           有值？
+   └→ 无条件消费掉 hint             ├→ 已被下发过 → 消费掉，跳过
+      ├→ 已被下发过 → 跳过          └→ 检查配对核（type^1，同 core）
+      └→ 种进空的兄弟槽                 两个槽都空？
+         needs_notify = false            ├→ 是 → 消费 hint，种到槽0
+                                         │        needs_notify = true
+                                         └→ 否 → hint 保留，下轮再试
+                        │
+                        ▼
+【兜底】send_task() 开头
+────────────────────────────────────────────────────────────────
+  被早发过的任务，入度归零后照样会走到正常下发路径
+  g_early_dispatched[task_id] 拦下它，跳过且不消耗核
+  （这是「每个任务恰好下发一次」的唯一卡点）
+```
+
+两处消费规则不对称是刻意的：同类型条件一旦成立必然放得下，失败只可能是
+「已过期」；跨类型「目标忙」不等于过期，留着下轮还有机会。
+
 ## 4. 具体改动（`src/scheduler/dispatch.c`、`Makefile_scheduler`）
 
 - `dispatch()`（[dispatch.c:627](esl_proxy/src/scheduler/dispatch.c#L627)）：
