@@ -1,4 +1,4 @@
-<title>早发调度机制总结</title>
+<title>early_dispatch_summary</title>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
 
@@ -164,7 +164,6 @@ body {
 }
 .rail li[data-on] button { background: var(--accent); }
 .rail li[data-on] button::after { color: var(--surface); font-weight: 600; }
-.rail li[data-todo] button { background: transparent; box-shadow: inset 0 0 0 1px var(--rule); }
 
 .modes { display: flex; gap: 0; border: 1px solid var(--rule); border-radius: 3px; overflow: hidden; }
 .modes button {
@@ -235,20 +234,6 @@ h2 {
   margin: 0 0 1.5rem;
 }
 
-.lede {
-  font-size: var(--step-2);
-  line-height: 1.5;
-  color: var(--ink);
-  max-width: 40ch;
-  margin: 0 0 2rem;
-  text-wrap: pretty;
-}
-.lede .em {
-  color: var(--accent);
-  font-weight: 500;
-  box-shadow: inset 0 -0.4em 0 var(--accent-soft);
-}
-
 p { max-width: 66ch; text-wrap: pretty; }
 
 code, .mono { font-family: var(--mono); font-size: 0.9em; }
@@ -293,7 +278,7 @@ a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-
 }
 
 .cover-title {
-  font-size: clamp(3rem, 9vw, 5.25rem);
+  font-size: clamp(2.5rem, 6.5vw, 3.75rem);
   line-height: 1.05;
   font-weight: 600;
   letter-spacing: 0.02em;
@@ -302,7 +287,7 @@ a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-
 
 .cover-sub {
   font-family: var(--mono);
-  font-size: var(--step-1);
+  font-size: clamp(1.0625rem, 2.2vw, 1.5rem);
   font-weight: 400;
   color: var(--accent);
   letter-spacing: 0.02em;
@@ -353,21 +338,6 @@ a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-
 .engine .slot--new .tag { color: var(--accent); }
 .engine .slot--new .who { color: var(--accent); font-weight: 500; }
 
-.engine-wrap {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.875rem 1.25rem;
-  margin: 0 0 2.25rem;
-}
-.engine-note {
-  font-family: var(--mono);
-  font-size: var(--step--1);
-  color: var(--ink-2);
-  line-height: 1.5;
-}
-.engine-note .arrow { color: var(--accent); }
-
 /* ── 落位图示 ───────────────────────────────────────────── */
 
 .place { display: grid; gap: 0.875rem; justify-items: start; margin: 0 0 1.5rem; }
@@ -381,90 +351,39 @@ a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-
   margin-bottom: 0.3125rem;
 }
 .core-arrow {
+  position: relative;
+  margin: 0;
+  padding: 0.25rem 0 0.875rem 1.5rem;
   font-family: var(--mono);
+  font-size: var(--step--1);
   color: var(--accent) !important;
-  padding-left: 1.25rem;
+  max-width: none;
+}
+.core-arrow::before {
+  content: "";
+  position: absolute;
+  left: 0.4375rem;
+  top: -0.875rem;
+  bottom: 0.375rem;
+  width: 1.5px;
+  background: var(--accent);
+}
+.core-arrow::after {
+  content: "";
+  position: absolute;
+  left: 0.0625rem;
+  bottom: -0.125rem;
+  border: 0.375rem solid transparent;
+  border-top: 0.5rem solid var(--accent);
+  border-bottom: 0;
 }
 .engine .slot--empty .who { color: var(--ink-3); }
 
 /* ── 数据行 ─────────────────────────────────────────────── */
 
-.figures {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
-  gap: 1px;
-  background: var(--rule);
-  border: 1px solid var(--rule);
-  border-radius: 3px;
-  overflow: hidden;
-  margin: 0 0 2rem;
-}
-.fig { background: var(--surface); padding: 0.875rem 1rem 1rem; }
-.fig dt {
-  font-family: var(--mono);
-  font-size: 0.6875rem;
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
-  color: var(--ink-3);
-  margin-bottom: 0.375rem;
-}
-.fig dd {
-  margin: 0;
-  font-family: var(--mono);
-  font-size: var(--step-2);
-  font-weight: 500;
-  font-variant-numeric: tabular-nums;
-  color: var(--ink);
-  line-height: 1.2;
-}
-.fig dd .unit { font-size: 0.6em; color: var(--ink-3); font-weight: 400; }
-.fig .gloss {
-  display: block;
-  margin-top: 0.375rem;
-  font-family: var(--sans);
-  font-size: var(--step--1);
-  color: var(--ink-2);
-  line-height: 1.45;
-}
-.fig--accent dd { color: var(--accent); }
-
 /* ── 判定条:立场声明 ───────────────────────────────────── */
 
-.verdicts { display: grid; gap: 0.75rem; margin: 0 0 2rem; max-width: 52ch; }
-.verdict {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 0.75rem;
-  align-items: baseline;
-  padding-left: 0.875rem;
-  border-left: 2px solid var(--rule);
-}
-.verdict .mark {
-  font-family: var(--mono);
-  font-size: var(--step--1);
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  white-space: nowrap;
-}
-.verdict p { margin: 0; font-size: var(--step-0); color: var(--ink-2); max-width: none; }
-.verdict--yes { border-left-color: var(--good); }
-.verdict--yes .mark { color: var(--good); }
-.verdict--no { border-left-color: var(--accent-line); }
-.verdict--no .mark { color: var(--accent); }
-
 /* ── 出处脚注 ───────────────────────────────────────────── */
-
-.provenance {
-  margin: 2.5rem 0 0;
-  padding-top: 1.25rem;
-  border-top: 1px solid var(--rule-soft);
-  font-size: var(--step--1);
-  color: var(--ink-3);
-  max-width: 72ch;
-  line-height: 1.6;
-}
-.provenance b { color: var(--ink-2); font-weight: 500; }
-.provenance .mono { color: var(--ink-2); }
 
 /* ── 小节标题 ───────────────────────────────────────────── */
 
@@ -479,6 +398,9 @@ a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-
   border-bottom: 1px solid var(--rule-soft);
 }
 .slide .sub:first-of-type { margin-top: 0; }
+.slide > p { margin: 0 0 1.125rem; }
+.slide > p:last-child { margin-bottom: 0; }
+.sub + p, .sub + .tbl-wrap, .sub + .ascii, .sub + .code, .sub + .place { margin-top: 0; }
 
 /* ── 表格 ───────────────────────────────────────────────── */
 
@@ -510,20 +432,24 @@ a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-
   font-variant-numeric: tabular-nums;
 }
 .tbl code { white-space: nowrap; }
-
-.conf {
+.tbl .val {
   font-family: var(--mono);
-  font-size: 0.6875rem;
-  letter-spacing: 0.03em;
-  padding: 0.1rem 0.4rem;
-  border-radius: 2px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
   white-space: nowrap;
 }
-.conf--hi { background: var(--slate-soft); color: var(--slate); }
-.conf--sw { background: var(--accent-soft); color: var(--accent); }
-.conf--no { background: var(--accent); color: var(--surface); font-weight: 500; }
 
 /* ── ASCII 图 / 代码 ───────────────────────────────────── */
+
+.ascii-cap {
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.06em;
+  color: var(--ink-3);
+  padding: 0.4375rem 1.125rem;
+  border-bottom: 1px solid var(--rule-soft);
+  background: var(--surface-2);
+}
 
 .ascii, .code {
   margin: 0 0 1.5rem;
@@ -532,23 +458,15 @@ a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-
   background: var(--surface);
   overflow: hidden;
 }
-.ascii-cap {
-  font-family: var(--mono);
-  font-size: 0.6875rem;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--ink-3);
-  padding: 0.4375rem 1.125rem;
-  border-bottom: 1px solid var(--rule-soft);
-  background: var(--surface-2);
-}
 .ascii pre, .code pre {
   margin: 0;
   padding: 1rem 1.125rem;
   overflow-x: auto;
   font-family: var(--mono);
   font-size: var(--step--1);
-  line-height: 1.6;
+  line-height: 1.75;
+  letter-spacing: 0;
+  tab-size: 4;
   color: var(--ink-2);
 }
 .ascii b, .code b { color: var(--accent); font-weight: 500; }
@@ -617,23 +535,6 @@ a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-
 
 /* ── 占位页 ─────────────────────────────────────────────── */
 
-.todo {
-  border: 1px dashed var(--rule);
-  border-radius: 3px;
-  padding: 2.5rem 1.5rem;
-  text-align: center;
-  font-family: var(--mono);
-  font-size: var(--step--1);
-  color: var(--ink-3);
-  background: var(--surface);
-}
-.todo .plan {
-  display: block;
-  margin-top: 0.5rem;
-  font-family: var(--sans);
-  color: var(--ink-2);
-}
-
 /* ── 翻页 ───────────────────────────────────────────────── */
 
 .pager {
@@ -677,7 +578,7 @@ body[data-mode="doc"] .pager { display: none; }
 </style>
 
 <header class="topbar">
-  <span class="doc-id"><b>early_dispatch</b> · esl_proxy/src/scheduler</span>
+  <span class="doc-id"><b>early_dispatch_summary</b></span>
   <ol class="rail" id="rail"></ol>
   <div class="modes" role="group" aria-label="阅读模式">
     <button type="button" id="mode-slide" aria-pressed="true">幻灯</button>
@@ -692,7 +593,7 @@ body[data-mode="doc"] .pager { display: none; }
     <div class="eyebrow"><span class="n">01</span><span>封面</span></div>
 
     <div class="cover">
-      <p class="cover-kicker">esl_proxy · 独立调度器</p>
+      <p class="cover-kicker">esl_proxy</p>
       <h1 class="cover-title">早发调度</h1>
       <p class="cover-sub">机制与验证总结</p>
 
@@ -723,8 +624,10 @@ body[data-mode="doc"] .pager { display: none; }
                        ┌──────────┬──────────┐
                        │   槽 0   │   槽 1   │
                        └──────────┴──────────┘
-  <u>哪个槽在跑不固定,由引擎内部的仲裁决定</u></pre>
+  <u>两个槽里同时只有一个在跑;它退休后,引擎切到兄弟槽</u></pre>
     </div>
+
+    
 
     <p>
       一个核里两种引擎<b>各一个</b>,它们是独立的执行单元 —— 槽位也是各自独立的两套。
@@ -735,6 +638,10 @@ body[data-mode="doc"] .pager { display: none; }
     <div class="note">
       一个核里有<b>两种引擎、每种两个槽</b>,而正常下发一次只占住其中一个位置 ——
       <b>其余位置空着,这就是早发能利用的空间。</b>
+    </div>
+
+    <div class="note note--plain">
+      本文所有观察都来自一个<b>软件模型</b> —— 真实硬件尚未接入。
     </div>
 
     <div class="sub">painter 与 dispatch 如何协同</div>
@@ -750,7 +657,7 @@ body[data-mode="doc"] .pager { display: none; }
         <tbody>
           <tr>
             <td>掌握</td>
-            <td>活入度 · 前驱列表 · 完成状态</td>
+            <td>还没完成的前驱数 · 前驱列表 · 完成状态</td>
             <td>核槽占用 · 谁在哪个槽 · 自己发过什么</td>
           </tr>
           <tr>
@@ -763,6 +670,7 @@ body[data-mode="doc"] .pager { display: none; }
     </div>
 
     <p>
+      painter 与 dispatch 是 <b>AICPU</b> 上的两个线程 —— 引擎是它们驱动的对象,不在同一颗处理器上。
       两者<b>原本只通过 ready_queue 和 completed_queue 两条队列通信</b>,不共享别的数据结构。所以
       <b>依赖策略全在 painter,槽位机制全在 dispatch</b> —— 这条分工后面全篇都用得上。
     </p>
@@ -772,21 +680,21 @@ body[data-mode="doc"] .pager { display: none; }
 
     <div class="ascii">
       <pre>  ①  引擎退休 P        ── 置完成标志位
-  ②  dispatch <u>下一轮</u>  ── 读走完成标志
+  ②  dispatch <u>下一轮</u>   ── 读走完成标志
   ③                    ── 反查是哪个任务,推进 completed_queue
   ④  painter           ── 取出 · 减入度 · 投进 ready_queue
   ⑤  dispatch <u>又下一轮</u> ── 取出 S,放进空槽
   ⑥  引擎启动 S
 
       └───── <b>跨两个线程循环,至少两个 dispatch 轮次</b> ─────┘
-              这一整段时间里,那个引擎是空的
-              <b>而它的兄弟槽也一直空着</b></pre>
+              <b>这一整段时间里,那个引擎是空的</b></pre>
     </div>
 
     <div class="note">
       <p>
-        <b>于是有了这个想法</b>:既然兄弟槽是空的,能不能在 P 还在跑的时候就把 S 放进去?
-        这样 P 一退休,S 就地接续,整趟往返一次都不用走。
+        <b>于是有了这个想法</b>:P 在跑的时候,<b>它所在的那个核上其实还有空位置</b>
+        —— 同一个引擎的另一个槽,或者这个核上的另一种引擎。
+        能不能趁 P 还在跑,就先把 S 放上去?这样 P 一退休,S 就地接续,<b>整趟往返一次都不用走</b>。
       </p>
     </div>
   </section>
@@ -813,11 +721,18 @@ body[data-mode="doc"] .pager { display: none; }
     <ol class="pts">
       <li>
         <div>
+          <h3>为什么阈值是 1</h3>
+          <p>只剩一个前驱没完成,就<b>只有一个前驱值得记下来</b>,而且它必然正是 S 在等的那个。</p>
+        </div>
+      </li>
+      <li>
+        <div>
           <h3>提示按 P 键入,不按 S</h3>
           <p>
             dispatch 扫到一个引擎时,已经握有 P 的位置 <code>(类型, 核, 槽)</code>,S 的落点从它直接算出来:
           </p>
           <p style="margin-top:.35rem">
+            (<b>同类型</b> = P 与 S 跑在同一种引擎上;<b>跨类型</b> = 分属 cube 和 vector。)<br>
             <b>同类型</b> —— 同一引擎的兄弟槽,<code>槽 ^ 1</code>。<br>
             <b>跨类型</b> —— 同一核编号、另一种引擎(<code>类型 ^ 1</code>)的<b>槽 0</b>,
             而且还要额外一步检查:目的地那个引擎<b>两个槽全空</b>。
@@ -829,16 +744,11 @@ body[data-mode="doc"] .pager { display: none; }
       </li>
       <li>
         <div>
-          <h3>为什么阈值是 1</h3>
-          <p>只剩一个前驱没完成,就<b>只有一个前驱可挂</b>,而且它必然正是 S 在等的那个。</p>
-        </div>
-      </li>
-      <li>
-        <div>
           <h3>提示不保证送达,而且两种类型的处置不同</h3>
           <p>
             提示数组是 painter 与 dispatch 之间<b>队列之外唯一的共享内存</b>,无锁 ——
             允许丢失,也允许重复。正因为允许丢失,它才能当旁路用。
+            <b>两条通道各有自己的一格</b>(同类型一格、跨类型一格),互不覆盖。
           </p>
           <p style="margin-top:.35rem">
             <b>同类型</b> —— 条件一旦成立必然放得下,所以取到就消费掉,成功与否都不留。<br>
@@ -850,14 +760,14 @@ body[data-mode="doc"] .pager { display: none; }
       </li>
       <li>
         <div>
-          <h3>去重在 dispatch 的唯一 send 点</h3>
-          <p><code>g_early_dispatched[task_id]</code> 同时覆盖早发和正常两条路。<b>故意不在 painter 拦</b> —— 在 painter 的 ready 门上抑制 S,等于把它从唯一还能救回它的路径上不可撤销地移除。</p>
+          <h3>早发排在正常下发之后</h3>
+          <p>先把 ready_queue 该发的全发完,早发只捡剩下的槽 —— 不抢「现在就能用」的机会。</p>
         </div>
       </li>
       <li>
         <div>
-          <h3>早发排在正常下发之后</h3>
-          <p>先把 ready_queue 该发的全发完,早发只捡剩下的槽 —— 不抢「现在就能用」的机会。</p>
+          <h3>去重在 dispatch 的唯一 send 点</h3>
+          <p><code>g_early_dispatched[task_id]</code> 同时覆盖早发和正常两条路。<b>故意不在 painter 拦</b> —— 在 painter 的 ready 门上抑制 S,等于把它从唯一还能救回它的路径上不可撤销地移除。</p>
         </div>
       </li>
     </ol>
@@ -871,10 +781,11 @@ body[data-mode="doc"] .pager { display: none; }
     <p>把每个任务的前驱<b>按引擎类型分成两组</b>:同类型 / 跨类型。</p>
 
     <div class="ascii">
-      <pre>  <b>rope_kv_cache</b> 的两个前驱
+      <pre>  <b>rope_kv_cache</b> (vector) 的三个前驱,按引擎类型分成两组
 
-    qk_norm  ──► <b>同类型表</b>   ← 和 rope 跑在同一种引擎上
-    v_proj   ──► <b>跨类型表</b>   ← 和 rope 跑在另一种引擎上</pre>
+    qk_norm (vector)   ──► <b>同类型表</b>
+    v_proj  (cube)     ──► <b>跨类型表</b>   <u>v_proj 被切成两块,</u>
+    v_proj  (cube)     ──► <b>跨类型表</b>   <u>所以是两个前驱任务</u></pre>
     </div>
 
     <p>
@@ -922,7 +833,7 @@ body[data-mode="doc"] .pager { display: none; }
 
     <div class="code">
       <pre>候选 = free_bitmap[type][<b>0</b>] <b>^</b> free_bitmap[type][<b>1</b>];
-<u>// 64 位掩码。第 i 位为 1 ⟺ 第 i 号核恰好有一个空槽 ⟺ 恰好一个槽在忙</u></pre>
+<u>// 位图:一位对应一个核。第 i 位为 1 ⟺ 第 i 号核恰好有一个空槽 ⟺ 恰好一个槽在忙</u></pre>
     </div>
 
     <div class="tbl-wrap">
@@ -956,13 +867,6 @@ body[data-mode="doc"] .pager { display: none; }
       <b>通知是按引擎发的,不认任务身份</b> —— 一个引擎上任何任务退休都会发出同样的信号。
       所以必须先确认「这个引擎上不可能有别的任务先退休」,否则排在 P 前面的那个先退休,
       S 就会<b>误以为是 P 完成了而提前开跑</b>。
-    </div>
-
-    <div class="note note--plain">
-      <b>这个判据的边界</b>:异或掩码分不出「正在执行」和「占着槽但卡住了」。
-      一个已经早发、还在等信号的 S 也是它那个引擎的唯一占用者,会被当成 P 读出来 ——
-      于是 S 的后继被排到一个<b>本身还没开跑</b>的任务后面,等待被放大。
-      实测每轮有<b>数百次</b>这样的选中。顺序仍然正确,但这是一个<b>已知的、没有关闭的成本</b>。
     </div>
 
     <div class="sub">S 放哪,怎么等到 P</div>
@@ -1002,7 +906,7 @@ body[data-mode="doc"] .pager { display: none; }
           <div class="slot slot--empty"><span class="tag">槽 1</span><span class="who">空</span></div>
         </div>
       </div>
-      <p class="core-arrow">│ P 退休时给对面引擎发信号<br>▼</p>
+      <p class="core-arrow">P 退休时给对面引擎发信号</p>
       <div>
         <div class="eng-name">同一个核上另一种引擎 · 要求两槽全空</div>
         <div class="engine">
@@ -1022,27 +926,21 @@ body[data-mode="doc"] .pager { display: none; }
               不需要任何通知,但<b>不是零依赖</b>:除了「开跑的任务不被打断」,还需要一条硬件性质 ——
               <b>核一变空,槽选择必须立刻回到槽 0</b>,而不是下一个仲裁周期。软件侧配合的是
               <b>永远先填槽 0</b>。两条缺一,S 就可能先于 P 被取走。
-              <span class="conf conf--no">这条硬件性质尚未在硬件上验证</span>
+              反过来说,<b>S 不用带任何标志</b> —— 槽的顺序天然把它挡在 P 后面。
             </td>
           </tr>
           <tr>
             <td><b>跨类型</b></td>
             <td>
-              需要一条跨引擎的通知通道。设想是 P 退休时往对面引擎的 <b>SPR</b>
+              需要<b>两样</b>东西:<br>
+              ① <b>下发时给 S 带一个「先等信号,不要立刻开跑」的标志</b> ——
+              否则那个引擎没有任何理由等 P,会立刻把 S 开跑。<br>
+              ② <b>一条跨引擎的通知通道</b> —— 设想是 P 退休时往对面引擎的 <b>SPR</b>
               (引擎的控制寄存器)写一个信号。
-              <span class="conf conf--sw">目前只有仿真器内实现</span>
-              真机路径只写 task_id,没有通知线路;跨类型在<b>编译期就被挡住</b>
-              —— 必须开延迟模型、且非真机构建才能编译。
             </td>
           </tr>
         </tbody>
       </table>
-    </div>
-
-    <div class="note note--plain">
-      「<b>先等信号,不要立刻开跑</b>」这个标志同理:它是仿真器里槽的一个状态,
-      <b>不是下发到硬件的一个位</b>。同类型不需要它(槽的顺序天然把 S 挡在 P 后面),
-      跨类型必须有它 —— 否则那个引擎没有任何理由等 P,会立刻把 S 开跑。
     </div>
 
     <div class="sub">为什么跨类型要求目的地两槽全空</div>
@@ -1051,30 +949,26 @@ body[data-mode="doc"] .pager { display: none; }
     </p>
     <div class="note note--plain">
       但这只在<b>放置那一刻</b>检查。之后正常下发只要该引擎<b>任一</b>槽空就会往这个核放任务,
-      于是新任务排到<b>还卡着的 S</b> 后面,继承它整段等待。实测每轮有<b>几十次</b>。
-      <b>这个队头阻塞没有被关闭。</b>
+      于是新任务排到<b>还卡着的 S</b> 后面,继承它整段等待。
+      <b>这个队头阻塞目前没有对策。</b>
     </div>
   </section>
 
   <!-- ══ 06 · 仿真器 ════════════════ -->
   <section class="slide" data-title="仿真器">
     <div class="eyebrow"><span class="n">06</span><span>验证 · 仿真器</span></div>
-    <h2>没有延迟模型,跨类型不存在,顺序也无法检查</h2>
+    <h2>没有真实硬件,就给每个槽加一个倒计时</h2>
 
-    <div class="note note--plain">
-      默认的假完成构建里,下发的同一轮就置上了完成标志,任务驻留不到一轮。
-      但这<b>不等于早发不会发生</b>:占用位要等下一轮才恢复,所以本轮刚拿到任务的核
-      在扫核时看起来正好是「一个忙槽」—— <b>同类型预排照样触发(实测 5–6 次)。</b>
-    </div>
+    <p>
+      原本任务是<b>瞬间完成</b>的:下发的同一轮就置上完成标志,不占用任何时间。
+      这对验证依赖解析够用,但早发关心的恰恰是<b>任务在核上停留的那段时间</b>里发生了什么。
+    </p>
 
-    <div class="note">
-      <b>真正缺的是三样:</b>
-      <p style="margin-top:.4rem">
-        ① <b>跨类型早发根本不存在</b> —— 编译期就被挡住,它的通知机制只活在延迟模型里。<br>
-        ② <b>「P 已经驻留很多轮」这种场景不会出现</b> —— 只有刚下发那一瞬的巧合。<br>
-        ③ <b>没有开始 / 退休的时间戳</b> —— 顺序断言打印的是「未检查」。
-      </p>
-    </div>
+    <p>
+      所以为了在<b>没有真实硬件</b>的条件下验证 AICPU 侧的调度器,给每个槽加了一个倒计时,
+      按引擎的仲裁规则推进 —— 任务这才会真正在核上停留一段时间。
+      它顺带给出了每个任务的<b>开始时刻和退休时刻</b>,顺序断言就是靠这两个时间戳。
+    </p>
 
     <div class="sub">仿真器做的事</div>
     <div class="tbl-wrap">
@@ -1092,7 +986,7 @@ body[data-mode="doc"] .pager { display: none; }
             </td>
             <td>
               建模<b>按序、不抢占</b>。最后那条「立刻回到槽 0」正是同类型早发依赖的那条硬件性质
-              —— 若两槽同时倒计时、或指针晚一个周期复位,S 就会先于 P
+              —— 若两槽同时倒计时、或指针晚一个周期复位,S 就会先于 P 被取走
             </td>
           </tr>
           <tr>
@@ -1130,17 +1024,17 @@ body[data-mode="doc"] .pager { display: none; }
 
     <p>
       几十次运行,<b>顺序断言全程 0 failed</b> —— 没有一次 S 跑在 P 前面,
-      而且检查的对数精确等于预排总数,<b>每一次预排都被查到</b>
-      (前提是预排总数不超过记录表的 <b>512</b> 上限,超了会静默丢弃 —— 实测远未触及)。
-      <b>派发任务数恰好 864</b>,不多不少。
+      而且检查的对数精确等于早发总数,<b>每一次早发都被查到</b>
+      (前提是早发总数不超过记录表的 <b>512</b> 上限,超了会静默丢弃 —— 实测远未触及)。
+      全图共 <b>864</b> 个任务,派发数<b>恰好等于它</b> —— 没有重复下发,也没有遗漏。
     </p>
 
     <div class="tbl-wrap">
       <table class="tbl">
-        <thead><tr><th></th><th>发布提示</th><th>实际预排</th></tr></thead>
+        <thead><tr><th></th><th>发布提示</th><th>实际早发</th></tr></thead>
         <tbody>
-          <tr><td><b>同类型</b></td><td>48 – 90</td><td><b>3 – 6</b></td></tr>
-          <tr><td><b>跨类型</b></td><td><b>579 – 635</b></td><td><b>62 – 227</b></td></tr>
+          <tr><td><b>同类型</b></td><td class="val">48 – 90</td><td class="val">5 – 6</td></tr>
+          <tr><td><b>跨类型</b></td><td class="val">580 – 612</td><td class="val">180 – 280</td></tr>
         </tbody>
       </table>
     </div>
@@ -1163,39 +1057,36 @@ body[data-mode="doc"] .pager { display: none; }
         <div>
           <h3>通知机制是一个 bit,真实硬件上站不住</h3>
           <p>
-            现在 P 退休时往对面写 1、S 读到 1 就走。仿真里成立,靠「放置那一刻清空信箱」挡陈旧信号。
-            但两种引擎<b>各自独立运转</b>:P 无条件写、S 无条件读,而<b>一个 bit 携带不了「谁发的、第几次发的」</b>
-            —— 任何一次无关退休都会把这一位置 1,S 就会误认为「我等的 P 完成了」提前开跑。
+            现在 P 退休时往对面写 1、S 读到 1 就走。仿真里这套成立,靠的是「放置那一刻清空信箱」挡掉陈旧信号 ——
+            而它之所以挡得住,是因为<b>清零和写 1 都发生在 dispatch 自己那一轮里</b>,顺序天然确定。
           </p>
           <p style="margin-top:.5rem">
-            <b>正确形态:单调计数器 + 期望值比较(<code>counter ≥ expected</code>)。</b>
-            只增不减、不需清零,就不存在「清零和置位之间被插进来」这回事,重复投递也无害。
+            <b>真机上这条不成立了</b>:清零来自 CPU 侧、写 1 来自引擎侧,两者<b>没有顺序保证</b>。
+            陈旧信号就挡不住了,而<b>一个 bit 又分不出新旧</b> ——
+            S 会把一次无关的退休误认为「我等的 P 完成了」,提前开跑。
           </p>
           <p style="margin-top:.5rem">
-            但 <code>expected</code> <b>不能是常数 1</b>:计数器是按 <b>(引擎, 核)</b> 记的,
-            配对引擎<b>每一次</b>退休都加一,不是按任务记。所以要在<b>放置时读一次当前值</b>,
-            然后等 <code>counter ≥ 放置时的值 + 1</code> —— 免疫陈旧信号的其实是这个<b>快照</b>,
-            不是计数器本身 —— 跟现在「放置那一刻清信箱」担的是同一份信息。
-            而「等 N 个前驱」也不能直接由它表达 —— N 个前驱可能在不同的核、不同的引擎上,
-            那需要每个前驱单元一个计数器。
+            <b>正确形态:换成一个只增不减的计数器。</b>
+            不需要清零,也就没有「清零和写入之间被插进来」这回事;重复投递无害;
+            而且它<b>带着次数</b>,S 能分得出「这是第几次退休」—— 正是一个 bit 给不了的东西。
           </p>
         </div>
       </li>
       <li>
         <div>
-          <h3>一格提示,只能一对一</h3>
-          <p>
-            每个 P <b>每条通道</b>只有一格(同类型一格、跨类型一格,两者独立)。
-            实测这张图 <b>318 个 P 有 ≥2 个跨类型后继</b>,第二次发布会<b>静默覆盖</b>第一条
-            —— 机会看不到,而且被覆盖的那次还计入了「已发布」,导致转化率这个指标本身不可解读。
-          </p>
-          <p style="margin-top:.5rem">
-            <b>注意这条只对跨类型是真限制。</b>同类型那边加提示格没用:
-            P 占住一个槽之后,它那个引擎只剩<b>一个</b>兄弟槽,
-            所以一个 P 最多也只能带一个同类型后继 ——
-            这是<b>每引擎两个槽</b>的硬限制,不是提示表的限制。
-          </p>
-        </div>
+            <h3>一格提示,把机制锁死在「同核」上</h3>
+            <p>
+              每个 P 每条通道只有一格(同类型一格、跨类型一格)。这在<b>今天正好够用</b> ——
+              一个核里就一个 cube、一个 vector,而早发只往 P <b>自己那个核</b>上放,
+              所以对一个 P 来说落点本来就只有两个:兄弟槽,和对面那个引擎。
+              <b>两个落点配两格提示,不多不少。</b>
+            </p>
+            <p style="margin-top:.5rem">
+              <b>但这也意味着机制走不出这个核。</b>一旦允许把 S 放到<b>别的核</b>上,
+              落点会多出几十个,而一个 P 能记下的后继还是两个 —— 提示表立刻变成瓶颈。
+              <b>想往跨核早发走,得先把它改成一对多。</b>
+            </p>
+          </div>
       </li>
     </ol>
 
@@ -1208,22 +1099,14 @@ body[data-mode="doc"] .pager { display: none; }
           <b>初值 = 该任务全部前驱的异或</b>,每个前驱完成时把它<b>异或出去</b>,
           入度为 1 时累加器里剩下的<b>就是</b>那个幸存者。类型判断查已有的类型表就分流。
         </p>
-        <p style="margin-top:.5rem">
-          ⚠ <b>有一处必须一起做的修正</b>:提交任务时,<b>已经完成的前驱不计入活入度、也不进后继表</b>,
-          所以那些边永远走不到「完成时异或出去」那一步。静态初值若是「全部前驱的异或」,
-          累加器里就会残留这些已完成的 id,算出来是个<b>垃圾值</b>。
-          修法:在提交时跳过它们的<b>同一个循环里</b>就把它们异或出去。
-          另外异或会把重复边抵消成 0,而计数器不会 —— 这张图没有重复边,但代码里没人拦。
-        </p>
       </div>
       <div>
-        <h3><span class="lbl">初始化</span>提前到静态图里算好</h3>
-        <p>
-          那个异或初值是<b>静态图的纯函数</b> —— 生成头文件的时候就能算出来,直接写成一个静态数组。
-          于是<b>两次 <code>malloc</code> 归零,三遍遍历降到一遍</b> ——
-          剩下的那一遍是填类型表,而异或累加器的类型分流正依赖它;
-          把类型表也一起生成到头文件里,这一遍也能省掉。
-        </p>
+          <h3><span class="lbl">初始化</span>提前到静态图里算好</h3>
+          <p>
+            每个任务的前驱索引<b>不管做成什么形式,都是静态图的纯函数</b> ——
+            完全可以在生成头文件的时候就算好、直接写成静态数组,
+            而不是每次启动再算一遍。启动时那几遍全图遍历和两次 <code>malloc</code> 都能省掉。
+          </p>
       </div>
     </div>
 
