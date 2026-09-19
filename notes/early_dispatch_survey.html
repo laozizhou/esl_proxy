@@ -1,0 +1,1476 @@
+<title>early_dispatch_survey</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+
+<style>
+/* ─────────────────────────────────────────────────────────
+   早发调度 · 工业界对标调研 — NVIDIA / AMD
+   样式沿用 early_dispatch_summary.html:
+   冷灰纸面 + 信号琥珀,IBM Plex Sans / Mono。
+   ───────────────────────────────────────────────────────── */
+
+:root {
+  --ground:      #f1f3f5;
+  --surface:     #ffffff;
+  --surface-2:   #e9ecf0;
+  --ink:         #15181c;
+  --ink-2:       #4b525b;
+  --ink-3:       #7c848e;
+  --rule:        #d6dae0;
+  --rule-soft:   #e4e7eb;
+
+  --accent:      #a3600b;
+  --accent-hot:  #c47812;
+  --accent-soft: #f7ead6;
+  --accent-line: #e0c398;
+
+  --slate:       #3d5f80;
+  --slate-soft:  #e2eaf1;
+  --good:        #2c6e49;
+
+  --slide-w: 62rem;
+
+  --step--1: 0.8125rem;
+  --step-0:  0.9375rem;
+  --step-1:  1.0625rem;
+  --step-2:  1.375rem;
+  --step-3:  1.875rem;
+  --step-4:  2.625rem;
+
+  --sans: "IBM Plex Sans", "PingFang SC", "Hiragino Sans GB",
+          "Microsoft YaHei", "Noto Sans SC", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", "SFMono-Regular", Consolas,
+          "Liberation Mono", monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground:      #131619;
+    --surface:     #1a1e23;
+    --surface-2:   #22272d;
+    --ink:         #e7eaee;
+    --ink-2:       #a6aeb7;
+    --ink-3:       #737b85;
+    --rule:        #2c3238;
+    --rule-soft:   #23282e;
+
+    --accent:      #e8a044;
+    --accent-hot:  #f4b45e;
+    --accent-soft: #2e2416;
+    --accent-line: #6b5124;
+
+    --slate:       #82a6c8;
+    --slate-soft:  #1e2833;
+    --good:        #6cba8b;
+  }
+}
+
+:root[data-theme="dark"] {
+  --ground:      #131619;
+  --surface:     #1a1e23;
+  --surface-2:   #22272d;
+  --ink:         #e7eaee;
+  --ink-2:       #a6aeb7;
+  --ink-3:       #737b85;
+  --rule:        #2c3238;
+  --rule-soft:   #23282e;
+
+  --accent:      #e8a044;
+  --accent-hot:  #f4b45e;
+  --accent-soft: #2e2416;
+  --accent-line: #6b5124;
+
+  --slate:       #82a6c8;
+  --slate-soft:  #1e2833;
+  --good:        #6cba8b;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+body {
+  background: var(--ground);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: var(--step-0);
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── 顶栏 ───────────────────────────────────────────────── */
+
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.625rem max(1.25rem, calc((100vw - var(--slide-w)) / 2 - 1rem));
+  background: color-mix(in srgb, var(--ground) 88%, transparent);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--rule-soft);
+}
+
+.doc-id {
+  font-family: var(--mono);
+  font-size: var(--step--1);
+  color: var(--ink-3);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+.doc-id b { color: var(--ink-2); font-weight: 500; }
+
+.rail {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.rail li { flex: 1; min-width: 0; }
+.rail button {
+  display: block;
+  width: 100%;
+  height: 1.5rem;
+  padding: 0;
+  border: 0;
+  border-radius: 1px;
+  background: var(--rule);
+  color: transparent;
+  font: inherit;
+  cursor: pointer;
+  position: relative;
+  transition: background 120ms ease;
+}
+.rail button::after {
+  content: attr(data-n);
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-family: var(--mono);
+  font-size: 0.625rem;
+  color: var(--ink-3);
+}
+.rail button:hover { background: var(--accent-line); }
+.rail button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.rail li[data-on] button { background: var(--accent); }
+.rail li[data-on] button::after { color: var(--surface); font-weight: 600; }
+
+.modes { display: flex; gap: 0; border: 1px solid var(--rule); border-radius: 3px; overflow: hidden; }
+.modes button {
+  font-family: var(--mono);
+  font-size: var(--step--1);
+  padding: 0.25rem 0.625rem;
+  border: 0;
+  background: transparent;
+  color: var(--ink-3);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.modes button[aria-pressed="true"] { background: var(--surface-2); color: var(--ink); }
+.modes button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+/* ── 舞台 ───────────────────────────────────────────────── */
+
+.deck {
+  max-width: var(--slide-w);
+  margin: 0 auto;
+  padding: 2.5rem 1.25rem 5rem;
+}
+
+.slide { display: none; }
+.slide[data-current] { display: block; }
+
+body[data-mode="doc"] .slide { display: block; }
+body[data-mode="doc"] .slide + .slide {
+  margin-top: 3rem;
+  padding-top: 3rem;
+  border-top: 1px solid var(--rule-soft);
+}
+
+/* ── 页内通用排版 ───────────────────────────────────────── */
+
+.eyebrow {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  font-family: var(--mono);
+  font-size: var(--step--1);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  margin-bottom: 1.5rem;
+}
+.eyebrow .n {
+  color: var(--accent);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+h1 {
+  font-size: var(--step-4);
+  line-height: 1.15;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  text-wrap: balance;
+  margin: 0 0 1.25rem;
+}
+h2 {
+  font-size: var(--step-3);
+  line-height: 1.25;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  text-wrap: balance;
+  margin: 0 0 1.5rem;
+}
+
+p { max-width: 66ch; text-wrap: pretty; }
+
+code, .mono { font-family: var(--mono); font-size: 0.9em; }
+code {
+  background: var(--surface-2);
+  padding: 0.1em 0.35em;
+  border-radius: 2px;
+}
+
+/* ── 链接 ───────────────────────────────────────────────── */
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+  border-bottom: 1px solid var(--accent-line);
+  transition: border-color 120ms ease;
+}
+a:hover { border-bottom-color: var(--accent); }
+a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 1px; }
+
+.repo { font-family: var(--mono); }
+.repo .branch { color: var(--ink-3); }
+
+/* ── 封面 ───────────────────────────────────────────────── */
+
+.cover {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  min-height: 26rem;
+  justify-content: center;
+  padding-bottom: 1rem;
+}
+
+.cover-kicker {
+  font-family: var(--mono);
+  font-size: var(--step--1);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  margin: 0 0 1.5rem;
+}
+
+.cover-title {
+  font-size: clamp(2.5rem, 6.5vw, 3.75rem);
+  line-height: 1.05;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  margin: 0;
+}
+
+.cover-sub {
+  font-family: var(--mono);
+  font-size: clamp(1.0625rem, 2.2vw, 1.5rem);
+  font-weight: 400;
+  color: var(--accent);
+  letter-spacing: 0.02em;
+  margin: 0.875rem 0 0;
+}
+
+.cover-meta {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.3125rem 1.5rem;
+  margin: 3.5rem 0 0;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--rule);
+  min-width: min(100%, 28rem);
+  font-size: var(--step--1);
+}
+.cover-meta dt {
+  font-family: var(--mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.cover-meta dd { margin: 0; color: var(--ink-2); }
+
+/* ── 小节标题 ───────────────────────────────────────────── */
+
+.sub {
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  margin: 1.875rem 0 0.75rem;
+  padding-bottom: 0.375rem;
+  border-bottom: 1px solid var(--rule-soft);
+}
+.slide .sub:first-of-type { margin-top: 0; }
+.slide > p { margin: 0 0 1.125rem; }
+.slide > p:last-child { margin-bottom: 0; }
+.sub + p, .sub + .tbl-wrap, .sub + .ascii, .sub + .code,
+.sub + .cols, .sub + .pts, .sub + .note, .sub + .src { margin-top: 0; }
+
+/* ── 表格 ───────────────────────────────────────────────── */
+
+.tbl-wrap { overflow-x: auto; margin: 0 0 1.5rem; }
+.tbl { width: 100%; border-collapse: collapse; font-size: var(--step--1); min-width: 32rem; }
+.tbl th, .tbl td {
+  text-align: left;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--rule-soft);
+  vertical-align: top;
+}
+.tbl thead th {
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  font-weight: 500;
+  border-bottom: 1px solid var(--rule);
+  white-space: nowrap;
+}
+.tbl tbody tr:last-child td { border-bottom: 0; }
+.tbl td:first-child { color: var(--ink); }
+.tbl code { white-space: nowrap; }
+.tbl .val {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+  white-space: nowrap;
+}
+/* 厂商列:窄而不换行 */
+.tbl .vendor {
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+/* ── ASCII 图 / 代码 ───────────────────────────────────── */
+
+.ascii, .code {
+  margin: 0 0 1.5rem;
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  background: var(--surface);
+  overflow: hidden;
+}
+.ascii pre, .code pre {
+  margin: 0;
+  padding: 1rem 1.125rem;
+  overflow-x: auto;
+  font-family: var(--mono);
+  font-size: var(--step--1);
+  line-height: 1.75;
+  letter-spacing: 0;
+  tab-size: 4;
+  color: var(--ink-2);
+}
+.ascii b, .code b { color: var(--accent); font-weight: 500; }
+.ascii i, .code i { color: var(--slate); font-style: normal; }
+.ascii u, .code u { color: var(--ink-3); text-decoration: none; }
+.code pre { color: var(--ink); }
+/* 引文出处:贴在代码块上沿 */
+.cite {
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.04em;
+  color: var(--ink-3);
+  padding: 0.4375rem 1.125rem;
+  border-bottom: 1px solid var(--rule-soft);
+  background: var(--surface-2);
+}
+
+/* ── 编号要点 ───────────────────────────────────────────── */
+
+.pts { display: grid; gap: 0.9375rem; margin: 0 0 1.5rem; padding: 0; list-style: none; counter-reset: pt; }
+.pts > li { display: grid; grid-template-columns: auto 1fr; gap: 0.75rem; counter-increment: pt; }
+.pts > li::before {
+  content: counter(pt);
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--accent);
+  background: var(--accent-soft);
+  width: 1.375rem;
+  height: 1.375rem;
+  border-radius: 2px;
+  display: grid;
+  place-items: center;
+  margin-top: 0.1875rem;
+}
+.pts h3 { margin: 0 0 0.1875rem; font-size: var(--step-0); font-weight: 600; }
+.pts p { margin: 0; font-size: var(--step--1); color: var(--ink-2); }
+.pts p + p { margin-top: 0.5rem; }
+
+/* ── 强调块 ─────────────────────────────────────────────── */
+
+.note {
+  border-left: 2px solid var(--accent);
+  background: var(--accent-soft);
+  padding: 0.75rem 1rem;
+  margin: 0 0 1.5rem;
+  border-radius: 0 2px 2px 0;
+  font-size: var(--step--1);
+  color: var(--ink-2);
+}
+.note b { color: var(--ink); font-weight: 500; }
+.note p { margin: 0; max-width: none; font-size: inherit; }
+.note p + p { margin-top: 0.5rem; }
+.note--plain { border-left-color: var(--rule); background: var(--surface-2); }
+/* 我们自己独有、无对标物的部分 */
+.note--own { border-left-color: var(--slate); background: var(--slate-soft); }
+.note--own b { color: var(--ink); }
+
+/* ── 两列 ───────────────────────────────────────────────── */
+
+.cols {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr));
+  gap: 1.25rem;
+  margin: 0 0 1.5rem;
+}
+.cols > div { min-width: 0; }
+.cols h3 { margin: 0 0 0.375rem; font-size: var(--step-0); font-weight: 600; }
+.cols h3 .lbl {
+  display: block;
+  margin-bottom: 0.1875rem;
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  font-weight: 400;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.cols p { margin: 0; font-size: var(--step--1); color: var(--ink-2); }
+.cols p + p { margin-top: 0.5rem; }
+
+/* ── 出处脚注 ───────────────────────────────────────────── */
+
+.src {
+  margin: 0 0 1.5rem;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 0.5625rem;
+  font-size: var(--step--1);
+}
+.src > li {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.75rem;
+  align-items: baseline;
+}
+.src .k {
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  white-space: nowrap;
+}
+.src .d { color: var(--ink-2); }
+.src .d a { font-weight: 500; }
+.src .star { color: var(--accent); font-weight: 600; }
+
+/* ── 翻页 ───────────────────────────────────────────────── */
+
+.pager {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  max-width: var(--slide-w);
+  margin: 0 auto;
+  padding: 0 1.25rem 3rem;
+}
+body[data-mode="doc"] .pager { display: none; }
+.pager button {
+  font-family: var(--mono);
+  font-size: var(--step--1);
+  padding: 0.4375rem 0.875rem;
+  background: var(--surface);
+  color: var(--ink-2);
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  cursor: pointer;
+}
+.pager button:hover:not(:disabled) { border-color: var(--accent-line); color: var(--ink); }
+.pager button:disabled { opacity: 0.35; cursor: default; }
+.pager button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.pager .count {
+  font-family: var(--mono);
+  font-size: var(--step--1);
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; animation: none !important; }
+}
+
+@media (max-width: 40rem) {
+  :root { --step-4: 1.875rem; --step-3: 1.5rem; --step-2: 1.125rem; }
+  .rail { display: none; }
+}
+</style>
+
+<header class="topbar">
+  <span class="doc-id"><b>early_dispatch_survey</b></span>
+  <ol class="rail" id="rail"></ol>
+  <div class="modes" role="group" aria-label="阅读模式">
+    <button type="button" id="mode-slide" aria-pressed="true">幻灯</button>
+    <button type="button" id="mode-doc" aria-pressed="false">通读</button>
+  </div>
+</header>
+
+<main class="deck" id="deck">
+
+  <!-- ══ 01 · 封面 ══════════════════════════════════════ -->
+  <section class="slide slide--cover" data-title="封面" data-current>
+    <div class="eyebrow"><span class="n">01</span><span>封面</span></div>
+
+    <div class="cover">
+      <p class="cover-kicker">esl_proxy</p>
+      <h1 class="cover-title">早发调度 · 对标调研</h1>
+      <p class="cover-sub">NVIDIA 与 AMD 的同类机制</p>
+
+      <dl class="cover-meta">
+        <dt>基准</dt>
+        <dd>本文对标的对象是 <span class="mono">early_dispatch_summary.html</span> 所描述的机制</dd>
+        <dt>范围</dt>
+        <dd>只收公开资料:厂商规范、官方文档、开源头文件与实现</dd>
+        <dt>结论</dt>
+        <dd>两条通道各有直接对应物;<b>「一个 bit 换成计数器」被两家独立印证</b></dd>
+        <dt>引文</dt>
+        <dd>代码块内为原文照录,块上沿标出处;中文说明为本文所加</dd>
+      </dl>
+    </div>
+  </section>
+
+  <!-- ══ 02 · 结论 ══════════════════════════════════════ -->
+  <section class="slide" data-title="结论">
+    <div class="eyebrow"><span class="n">02</span><span>结论</span></div>
+    <h2>一页读完</h2>
+
+    <div class="sub">两条通道,各有对应物</div>
+    <div class="tbl-wrap">
+      <table class="tbl">
+        <thead><tr><th>我们的机制</th><th>AMD</th><th>NVIDIA</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><b>同类型</b><br>S 放进 P 的兄弟槽,靠槽仲裁顺序接续,<b>不需要任何通知</b></td>
+            <td>AQL packet header 的 <b>barrier bit</b></td>
+            <td>同一 <b>stream</b> 的按序语义</td>
+          </tr>
+          <tr>
+            <td><b>跨类型</b><br>S 放到对面引擎,带「先等信号」标志,P 退休时写信号</td>
+            <td><b>barrier-AND packet</b> + completion signal</td>
+            <td><b><code>cuStreamWaitValue64</code></b> / event</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="note">
+      <p>
+        这不是巧合。<b>「让后继提前就位、由硬件而不是软件回路来放行」</b>是同一个问题,
+        三家都独立走到了同一个分岔口:<b>要么排在按序队列里(不需要信号),要么显式等一个信号。</b>
+      </p>
+    </div>
+
+    <div class="sub">我们自己列的缺陷,工业界给的答案更强</div>
+    <div class="tbl-wrap">
+      <table class="tbl">
+        <thead><tr><th></th><th>形态</th><th>比较方式</th><th>要清零吗</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>我们现在</td>
+            <td class="val">1 bit</td>
+            <td class="val">== 1</td>
+            <td><b>要</b> —— 且真机上挡不住陈旧信号</td>
+          </tr>
+          <tr>
+            <td>我们设想</td>
+            <td class="val">只增计数器</td>
+            <td>带次数</td>
+            <td>不用</td>
+          </tr>
+          <tr>
+            <td><span class="vendor">NVIDIA</span></td>
+            <td class="val">64 位单调值</td>
+            <td class="val">cyclic GEQ</td>
+            <td><b>永远不用</b> —— 循环比较忽略回绕</td>
+          </tr>
+          <tr>
+            <td><span class="vendor">AMD</span></td>
+            <td class="val">int64_t signal</td>
+            <td>完成时原子递减,等 0;或掩码条件</td>
+            <td>不用</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="note note--own">
+      <p>
+        <b>而有三处我们的设计,没有找到哪家把它做成暴露的原语</b> ——
+        匿名的引擎级完成信号加上 <code>free_bitmap</code> 异或不变量、提示按 P 键入、
+        以及所依赖的那条槽仲裁性质。近似物和学术前例见第 08 页。
+      </p>
+    </div>
+  </section>
+
+  <!-- ══ 03 · 基准 ══════════════════════════════════════ -->
+  <section class="slide" data-title="对标基准">
+    <div class="eyebrow"><span class="n">03</span><span>对标基准</span></div>
+    <h2>被对标的是什么</h2>
+
+    <p>
+      为了让后面几页有共同的参照,先把我们机制里<b>与对标相关的那几条</b>摘出来。
+      完整描述见 <span class="mono">early_dispatch_summary.html</span>。
+    </p>
+
+    <div class="sub">机制骨架</div>
+    <div class="ascii">
+      <pre>  painter   解依赖
+              ├─ 入度归零 ─────────────► ready_queue
+              └─ <b>只差一个前驱</b> ────────► <b>hint[P] = S</b>
+                 <u>两个发布点:resolve_dep 递减到 1,以及 add_successors</u>
+                 <u>提交时入度即为 1(纯链式永远不发生「降到 1」的跳变)</u>
+
+  dispatch  一轮之内:
+              ① 读完成标志,推进 completed_queue
+              ② send_task —— ready_queue 先发,早发只捡剩下的槽
+              ③ 扫核:<b>free_bitmap[type][0] ^ free_bitmap[type][1]</b>
+                   <u>恰好一个槽在忙 ⟹ 这个引擎上没有任务能先于 P 退休</u>
+                   └─ 查 hint[P] ─┬─ <i>同类型</i> ─► P 的兄弟槽(槽 ^ 1)
+                                  └─ <i>跨类型</i> ─► 同核对面引擎(类型 ^ 1)的槽 0
+                                                  <u>要求该引擎两槽全空</u>
+
+  去重        <b>g_early_dispatched[task_id]</b> —— dispatch 唯一 send 点,同时覆盖两条路</pre>
+    </div>
+
+    <div class="sub">两条通道靠什么等到 P</div>
+    <div class="tbl-wrap">
+      <table class="tbl">
+        <thead><tr><th>通道</th><th>S 放在哪</th><th>靠什么等到 P</th><th>提示的处置</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><b>同类型</b></td>
+            <td>P 的兄弟槽(同一引擎)</td>
+            <td><b>不需要通知</b> —— 靠仲裁本身</td>
+            <td>条件成立必然放得下,取到就<b>无条件消费</b></td>
+          </tr>
+          <tr>
+            <td><b>跨类型</b></td>
+            <td>同核对面引擎的槽 0,要求两槽全空</td>
+            <td>P 退休时往对面写信号,S 读到才开跑</td>
+            <td>「目的地忙」不等于过期,<b>保留重试</b></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>
+      两条通道的机会并不对等:全图 <span class="mono">2742</span> 条边里,
+      同类型只有 <span class="mono">180</span> 条 —— <b>约 6.6%</b>。
+      这个失衡后面第 09 页会回来讨论,它决定了工程投入该压在哪。
+    </p>
+
+    <div class="note note--plain">
+      两个已知缺陷:<b>① 通知是一个 bit,真机上站不住</b>(清零来自 CPU 侧、写 1 来自引擎侧,
+      两者没有顺序保证,而一个 bit 分不出新旧);<b>② 每个 P 每条通道只有一格提示,
+      机制走不出这个核。</b>这两条是第 07 页的对标重点。
+    </div>
+  </section>
+
+  <!-- ══ 04 · AMD ══════════════════════════════════════ -->
+  <section class="slide" data-title="AMD · AQL">
+    <div class="eyebrow"><span class="n">04</span><span>AMD · AQL</span></div>
+    <h2>两条通道的规范级对应</h2>
+
+    <p>
+      AMD 的 HSA / AQL 是<b>规范公开、参考实现开源</b>的,对我们参考价值最高 ——
+      能读到 packet 的确切位域,而不是只能读 API 语义。
+    </p>
+
+    <div class="sub">同类型 ↔ barrier bit</div>
+    <div class="code">
+      <div class="cite">hsa.h · HSA_PACKET_HEADER_BARRIER 的文档注释</div>
+      <pre>Barrier bit. If the barrier bit is set, the processing of the
+current packet only launches when <b>all preceding packets
+(within the same queue) are complete</b>.</pre>
+    </div>
+    <div class="code">
+      <div class="cite">HSA SysArch 1.2 · §2.9.2 —— 规范自己的措辞更能说明问题</div>
+      <pre>All preceding packets in the queue must have completed their
+    <i>launch phase</i>.
+...
+If the barrier bit in the packet header is set then all preceding
+packets in the queue must have <b>completed</b>.</pre>
+    </div>
+    <div class="note">
+      <p>
+        <b>规范这两句连起来读才有意思:默认只保证前面的包都「启动过」,
+        barrier bit 把它升级成「前面的包都已完成」。</b>
+      </p>
+      <p>
+        这正是我们同类型通道的处境 —— 光有槽的先后不够,
+        还得保证 P <b>退休</b>之后 S 才被取走,靠的就是那条「核一变空立刻回槽 0」的仲裁性质。
+        AMD 把这一步做成了包头里的一个位,我们靠时序性质。
+      </p>
+    </div>
+
+    <div class="sub">跨类型 ↔ barrier-AND packet</div>
+    <div class="code">
+      <div class="cite">hsa.h · 结构体原文;位域与 SysArch 1.2 Table 2-9 一致</div>
+      <pre>typedef struct hsa_barrier_and_packet_s {
+  uint16_t     header;
+  uint16_t     reserved0;
+  uint32_t     reserved1;
+  <b>hsa_signal_t dep_signal[5];</b>        <u>// 最多等 5 个依赖信号</u>
+  uint64_t     reserved2;
+  <b>hsa_signal_t completion_signal;</b>    <u>// 完成时被原子递减</u>
+} hsa_barrier_and_packet_t;</pre>
+    </div>
+
+    <ol class="pts">
+      <li>
+        <div>
+          <h3><code>dep_signal[5]</code> —— 硬件层面的扇入上限是 5</h3>
+          <p>
+            超过 5 个前驱就串接多个 barrier packet。这是一个真实的工程折中数字,
+            对我们有直接参考意义 —— 我们的图入度均值 3.17、最大 16。
+          </p>
+        </div>
+      </li>
+      <li>
+        <div>
+          <h3>handle 为 0 的信号被当作「依赖已满足」</h3>
+          <p>
+            barrier-OR 里反过来:handle 0 被当作「依赖未满足」。
+            这让<b>定长 packet 支持可变扇入</b> —— 不用为扇入 2 和扇入 5 准备两种包格式。
+          </p>
+        </div>
+      </li>
+      <li>
+        <div>
+          <h3><code>completion_signal</code>:完成阶段被原子递减</h3>
+          <p>
+            <b>这是一个倒数到 0 的 join counter。</b>初值设成「要等几个」,
+            每个完成方递减,等待方等 0。
+          </p>
+          <p>
+            <b>有一条容易漏掉的约束</b>:规范 §2.9.8 说 barrier-AND 只保证在所有信号
+            「become zero <b>and remain zero</b> until the barrier-AND packet completes」时才完成 ——
+            要抄这个形状的话,零值必须<b>保持</b>,不能被下一轮立刻重置。
+          </p>
+          <p>
+            对我们另有一个用处:SPMD 任务的 <code>count</code> 个 block
+            本身就是一次「count 对 1 的汇合」,这个原语的形状正好是它。
+          </p>
+        </div>
+      </li>
+    </ol>
+
+    <div class="sub">更灵活的一个:barrier value packet</div>
+    <div class="code">
+      <div class="cite">ROCR-Runtime · hsa_amd_barrier_value_packet_t(AMD 扩展)</div>
+      <pre>Halts packet processing and waits for
+    <b>(signal_value &amp; ::mask) ::cond ::value</b>
+to be satisfied, where signal_value is the value of the
+signal ::signal.</pre>
+    </div>
+    <p>
+      带掩码的条件等待,表达力比单纯的「等于 0」强得多。
+      这是 AMD 自己的扩展(包类型 <code>HSA_AMD_PACKET_TYPE_BARRIER_VALUE</code>),
+      <b>基础 HSA 规范里只有 barrier-AND 和 barrier-OR</b>,没有它。
+    </p>
+
+    <div class="sub">信号与队列</div>
+    <div class="tbl-wrap">
+      <table class="tbl">
+        <thead><tr><th>项</th><th>规范/文档说法</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><code>hsa_signal_value_t</code></td>
+            <td>large machine model 下 <span class="val">int64_t</span>,small model 下 <span class="val">int32_t</span></td>
+          </tr>
+          <tr>
+            <td>doorbell 单调性</td>
+            <td>
+              队列类型为 <b>single producer</b> 时,doorbell 值必须单调递增,
+              <b>且通知包 ID 之前的所有包必须已经分配好</b>
+            </td>
+          </tr>
+          <tr>
+            <td>队列形态</td>
+            <td>packet processor 按<b>环形缓冲</b>处理;<code>size</code> 是最大可容纳包数,必须是 2 的幂</td>
+          </tr>
+          <tr>
+            <td>队列深度实例</td>
+            <td>
+              MI300X 的 <code>rocminfo</code>:Queue Min Size <span class="val">64</span>,
+              Max Size <span class="val">131072</span>,Max Queue Number <span class="val">128</span>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="note note--own">
+      最后一行是<b>和我们差别最大的一处</b>:AQL 队列最多能装 131072 个包,
+      而我们每个引擎只有<b>两个槽</b>。深队列可以「把 S 连着依赖一起塞进去然后不管了」;
+      两个槽做不到,这是提示机制在我们这边格外吃紧的原因。
+    </div>
+  </section>
+
+  <!-- ══ 05 · NVIDIA 原语 ══════════════════════════════ -->
+  <section class="slide" data-title="NVIDIA · 原语">
+    <div class="eyebrow"><span class="n">05</span><span>NVIDIA · 原语</span></div>
+    <h2>GEQ 计数器与按序 stream</h2>
+
+    <p>
+      NVIDIA 没有公开 packet 级规范,但<b>驱动 API 暴露的原语说明了同样的事</b>。
+    </p>
+
+    <div class="sub">跨类型 ↔ Stream Memory Operations</div>
+    <div class="code">
+      <pre>cuStreamWaitValue64 (stream, addr, value, flags);   <u>// 等</u>
+cuStreamWriteValue64(stream, addr, value, flags);   <u>// 写</u></pre>
+    </div>
+    <div class="code">
+      <div class="cite">Driver API · cuStreamWaitValue64 函数说明</div>
+      <pre>By default, the condition is to wait for
+    <b>(int64_t)(*addr - value) &gt;= 0</b>
+a cyclic greater-or-equal. Other condition types can be
+specified via flags.</pre>
+    </div>
+    <div class="code">
+      <div class="cite">Driver API · CUstreamWaitValue_flags 枚举说明</div>
+      <pre>CU_STREAM_WAIT_VALUE_GEQ = 0x0
+    Wait until (int32_t)(*addr - value) &gt;= 0 (or int64_t for
+    64 bit values). Note this is a <b>cyclic comparison which
+    ignores wraparound</b>. (Default behavior.)</pre>
+    </div>
+
+    <div class="note">
+      <p>
+        <b>这就是我们说的「只增不减的计数器」。</b>
+        而且比我们的设想多一层:那个循环减法比较<b>忽略回绕</b>,
+        所以 64 位计数器<b>永远不需要清零</b> ——
+        正好消灭了我们文档里「信箱什么时候清」那一整节的坑。
+      </p>
+      <p>
+        这些操作作用在<b>设备指针</b>上(不接受 <code>cuMemAllocManaged</code> 的托管内存),
+        由 stream 在设备侧按序执行,不需要 host 参与。
+        能力用 <code>CU_DEVICE_ATTRIBUTE_CAN_USE_64_BIT_STREAM_MEM_OPS</code> 查询。
+      </p>
+    </div>
+
+    <div class="note note--plain">
+      <b>一条必须记住的官方警告</b>:「Synchronization ordering established through these APIs
+      is <b>not visible to CUDA</b>. CUDA tasks that are (even indirectly) ordered by these APIs
+      should also have that order expressed with CUDA-visible dependencies such as events.」
+      —— 也就是说这套原语是<b>裸同步</b>,CUDA 自己的依赖跟踪看不见它。
+      对我们不构成问题(我们本来就是自己管依赖),但说明它在 CUDA 体系里是个逃生舱而非主路。
+      (历史注记:CUDA 11.x 及更早的文档里这套操作默认关闭,Linux 上需要内核模块参数
+      <code>NVreg_EnableStreamMemOPs=1</code>;该说明在当前版本文档中已移除。)
+    </div>
+
+    <div class="sub">同类型 ↔ stream 按序 + CUDA Graph</div>
+    <p>
+      同一 stream 内两个 kernel 严格按序。把 S 推进 P 后面的同一条 stream,
+      S 就自动接在 P 之后,<b>不用回 host</b> —— 和 AQL 的 barrier bit 是一回事。
+    </p>
+    <p>
+      <b>CUDA Graph</b> 把整张依赖图交给驱动。<code>cudaGraphUpload()</code>
+      把 graph 的<b>物理内存映射</b>(以及设备图所需的设备侧资源)提前做掉,
+      <b>把这部分成本从首次 launch 里摘出来</b> —— 注意它省的是映射与分配开销,
+      不是「把执行元数据搬到设备上」,后续的 <code>cudaGraphLaunch()</code> 也不只是一次触发。
+    </p>
+    <div class="note note--plain">
+      设备侧图启动的几个硬上限值得记:<b>fire-and-forget 120</b>(同一父图一次执行内,
+      跨 launch 重置)、<b>pending tail launch 255</b>、以及同一张图同时只能有<b>一个</b>
+      self-launch 排队。前置条件是 instantiate 时带 <code>cudaGraphInstantiateFlagDeviceLaunch</code>,
+      并且已上传到设备 —— 上传有三条路:<code>cudaGraphUpload()</code>、
+      instantiate 时请求上传、或<b>先从 host 启动一次</b>(隐式完成上传)。
+    </div>
+  </section>
+
+  <!-- ══ 06 · NVIDIA PDL ═══════════════════════════════ -->
+  <section class="slide" data-title="NVIDIA · PDL">
+    <div class="eyebrow"><span class="n">06</span><span>NVIDIA · PDL</span></div>
+    <h2>切在另一层的早发</h2>
+
+    <p>
+      <b>Programmatic Dependent Launch</b>(PDL,compute capability 9.0 及以上)
+      常被拿来和早发类比,但它<b>切的层不一样</b> —— 值得单独说清楚,免得对标对错了位置。
+    </p>
+
+    <div class="sub">基线的浪费在两头</div>
+    <div class="ascii">
+      <pre>  kernel A:  ████████████████▓▓▒▒░░
+                              └── <u>尾部 ramp down:大部分 CTA 已退,SM 大量空闲</u>
+
+  kernel B:                      ░░▒▒▓▓████
+                              └── <b>头部 preamble:算地址、load 常量、搬权重</b>
+                                  <b>—— 全都不依赖 A 的输出,却被 stream 语义卡在外面</b></pre>
+    </div>
+
+    <div class="sub">机制:三步</div>
+    <div class="code">
+      <pre><u>// ① host 侧给 B 打 launch attribute</u>
+cudaLaunchAttributeProgrammaticStreamSerialization
+    → programmaticStreamSerializationAllowed = 1
+
+<u>// ② 前驱 A 里,快干完时</u>
+<b>cudaTriggerProgrammaticLaunchCompletion();</b>
+
+<u>// ③ 后继 B 里</u>
+load_constants();  compute_addresses();  prefetch_weights();   <u>// 不依赖 A</u>
+<b>cudaGridDependencySynchronize();</b>                              <u>// 到这儿才等</u>
+main_body();                                                   <u>// 依赖 A</u></pre>
+    </div>
+
+    <div class="code">
+      <div class="cite">CUDA Programming Guide · §4.5 —— 放行条件的准确措辞</div>
+      <pre>The CUDA driver can launch the secondary kernel when all primary
+thread blocks have <b>launched and executed</b>
+cudaTriggerProgrammaticLaunchCompletion. If the primary kernel
+doesn't execute the trigger, it <b>implicitly occurs after all
+thread blocks in the primary kernel exit</b>.</pre>
+    </div>
+    <p>
+      也就是说 PDL 同样需要一次<b>多对一的汇合</b>:整个 grid 的 block 都触发过或都退出了,
+      后继才被放行。（官方没有说这是如何实现的 —— 「隐式的 grid 级计数器」是本文的推断,不是文档说法。）
+    </p>
+
+    <div class="note">
+      <p>
+        <b>PDL 的核心概念,也是最值得抄的一点</b>:它把 stream 语义里混在一起的两件事拆开了 ——
+        <b>调度可见性</b>(B 能否占 SM 开始执行)提前释放,
+        <b>内存可读性</b>(B 能否读 A 的输出)仍然卡着。
+      </p>
+    </div>
+
+    <div class="sub">和我们的差别</div>
+    <div class="tbl-wrap">
+      <table class="tbl">
+        <thead><tr><th></th><th>我们的早发</th><th>PDL</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>提前的是什么</td>
+            <td><b>任务的下发</b>(分核 → 落槽 → 挂等待;<b>旁路</b> ready_queue,不是把入队提前)</td>
+            <td><b>kernel 的执行</b>(占 SM、跑 preamble)</td>
+          </tr>
+          <tr>
+            <td>依赖形状</td>
+            <td>任意 DAG,扇入最大 16</td>
+            <td>
+              stream 里是 primary / secondary 一对;
+              在 CUDA Graph 里用 <code>cudaGraphDependencyTypeProgrammatic</code>
+              <b>边</b>表达,<b>可任意扇入扇出、不限相邻、不限深度</b>
+            </td>
+          </tr>
+          <tr>
+            <td>对执行侧的要求</td>
+            <td>
+              <b>不改 kernel</b>,但跨类型要求引擎侧支持「占着槽却既不倒计时也不开跑」的状态,
+              以及一条跨引擎通知通道(设想是往对面引擎的 SPR 写)
+            </td>
+            <td><b>要改 kernel</b> —— 里面插两个内建函数</td>
+          </tr>
+          <tr>
+            <td>省下什么</td>
+            <td>整趟完成通知回路</td>
+            <td>整个 prologue</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="note note--plain">
+      <p>
+        <b>纠正一个常见误解</b>:PDL 并非「只能同 stream 相邻两个、深度 1」。
+        官方 §4.5.3 明确支持在 CUDA Graph 中用 edge data 表达 PDL 依赖,
+        <code>cudaGridDependencySynchronize()</code> 的官方注释用的是复数
+        <span class="mono">all primary kernels</span>;
+        <code>cudaLaunchAttributeProgrammaticEvent</code> 还能把触发点录成一个 event
+        供其它 stream 等待,连 stream 相邻性都不需要。链式(B 既是 A 的后继又是 C 的前驱)也没有限制。
+      </p>
+      <p>
+        <b>所以真正的差别不在依赖形状,而在切的层次。</b>
+      </p>
+    </div>
+
+    <div class="note note--plain">
+      <p>
+        我们跨类型早发里 <b>S「等信号」的那个点</b>,正好是
+        <code>cudaGridDependencySynchronize()</code> 该在的位置 ——
+        现在那个窗口里 S 占着槽但既不倒计时也不算开跑,PDL 那套是在里面跑 preamble。
+        <b>两者可以叠加。</b>
+      </p>
+      <p>
+        CUTLASS 的 Example 63(<span class="mono">63_hopper_gemm_with_weight_prefetch</span>)
+        就是这个用法:当某个输入矩阵(权重)不由上游产出时,在 prologue 期间预取它,
+        <b>专打 bandwidth-bound</b> —— 和 qwen3 decode 同类负载。
+      </p>
+    </div>
+  </section>
+
+  <!-- ══ 07 · 两个缺陷 ═════════════════════════════════ -->
+  <section class="slide" data-title="缺陷对标">
+    <div class="eyebrow"><span class="n">07</span><span>缺陷对标</span></div>
+    <h2>我们列的两个缺陷,他们怎么解</h2>
+
+    <div class="sub">缺陷一:一个 bit → 计数器</div>
+    <div class="note">
+      <p>
+        <b>我们的判断是对的,而且两家给的答案比我们设想的更强。</b>
+        直接可抄的是 NVIDIA 那个循环比较:
+      </p>
+      <p><code>(int64_t)(*addr - value) &gt;= 0</code></p>
+      <p>
+        它一次解决三个问题:<b>陈旧信号</b>(单调值分得出新旧)、
+        <b>回绕</b>(循环减法忽略 wraparound)、
+        <b>清零时机</b>(根本不需要清零,那个竞态不存在)。
+      </p>
+      <p>
+        AMD 走的是另一个方向 —— 倒数到 0 的递减计数器。要注意它附带
+        「become zero <b>and remain zero</b>」的约束(第 04 页),
+        单调递增那条路没有这个包袱。
+      </p>
+    </div>
+    <div class="note note--own">
+      <p>
+        <b>但要注意一件事:换成计数器解决的是「新旧」,不解决「是谁」。</b>
+        我们的信号是<b>引擎级、匿名</b>的 —— 如果对面引擎上跑的不是 P 而是别的任务,
+        计数器照样会涨。
+      </p>
+      <p>
+        所以第 03 页那个 <code>free_bitmap</code> 异或不变量
+        <b>在换成计数器之后仍然需要</b>。两者是正交的:计数器管新旧,异或管身份。
+      </p>
+    </div>
+
+    <div class="sub">缺陷二:一格提示 → 一对多</div>
+    <p>两家的路子不一样,可以按需要选:</p>
+    <div class="cols">
+      <div>
+        <h3><span class="lbl">AMD</span>硬件定长,扇入上限 5</h3>
+        <p>
+          超了串接多个 barrier packet。定长 packet 加上「handle 0 表示已满足」,
+          实现简单、位宽固定、硬件代价可控。
+        </p>
+        <p><b>要往跨核早发走,这条更值得参考。</b></p>
+      </div>
+      <div>
+        <h3><span class="lbl">NVIDIA</span>不设固定扇入</h3>
+        <p>
+          CUDA Graph 的节点可以有任意入度,由驱动在建图时展开;
+          或者一个依赖一次 <code>cuStreamWaitValue</code>。
+        </p>
+        <p>更灵活,但把复杂度放在了软件层。</p>
+      </div>
+    </div>
+    <div class="note note--plain">
+      两条都比我们现在的「每个 P 每条通道一格」宽松。
+      我们那一格今天正好够用,是因为落点只有兄弟槽和对面引擎两个;
+      一旦允许跨核,落点变几十个,提示表立刻成为瓶颈。
+    </div>
+  </section>
+
+  <!-- ══ 08 · 无对标物的部分 ═══════════════════════════ -->
+  <section class="slide" data-title="原创部分">
+    <div class="eyebrow"><span class="n">08</span><span>原创部分</span></div>
+    <h2>没找到哪家做成原语的三处</h2>
+
+    <div class="note note--plain">
+      措辞先声明清楚:下面是<b>「没有找到哪家把它做成暴露的原语」</b>,
+      不是「不存在」—— 这类否定性判断永远无法证明。
+      每一条后面都列出了检索到的<b>近似物</b>。
+    </div>
+
+    <ol class="pts">
+      <li>
+        <div>
+          <h3>匿名的、引擎级的完成信号 + 异或不变量</h3>
+          <p>
+            我们的通知<b>按引擎发,不认任务身份</b> —— 一个引擎上任何任务退休都发出同样的信号。
+            两家的信号都是<b>对象级</b>的:AMD 的 <code>completion_signal</code> 挂在 packet 上,
+            NVIDIA 的 wait value 是一个具体地址,谁完成、通知谁,一一对应。
+          </p>
+          <p>
+            <b>近似物三个:</b>HSA 允许多个 packet <b>共用同一个 completion_signal</b>,
+            而完成是原子递减 —— 把一条队列上所有包指向同一个信号,
+            得到的就是一个匿名的、队列级完成计数器(是软件约定,不是独立原语,但形状可表达);
+            HSA 的 <code>read_index</code> 是队列级单调进度计数器,不过它按索引标识进度;
+            Blackwell 的 <b>Cluster Launch Control</b>
+            (<code>clusterlaunchcontrol.try_cancel</code>)返回成功带 ClcID、
+            <b>失败则是一个不含身份的硬件信号</b> —— 问的是「有没有活」而非「谁退休了」,
+            但它是 NVIDIA 目前最接近「无身份硬件通知」的东西。
+          </p>
+          <p>
+            <b>而那个 <code>free_bitmap</code> 异或不变量本身,没有找到任何近似物。</b>
+          </p>
+        </div>
+      </li>
+      <li>
+        <div>
+          <h3>提示按 P 键入而不是按 S 键入</h3>
+          <p>
+            dispatch 扫到引擎时已经握有 P 的位置,S 的落点直接算出来,
+            <b>不需要「task_id → 位置」的反查表,也没有陈旧映射的风险</b>。
+            没有哪家的机制会「查生产者此刻在哪、把消费者放过去」。
+          </p>
+          <p>
+            <b>已排除的近似物:</b>CUDA Locality Domains、cluster / preferred-cluster 属性、
+            green contexts —— 都是<b>程序员指定</b>区域,不追踪生产者。
+            <b>真近似物:</b>thread block cluster + 分布式共享内存(CC 9.0+)
+            确实由硬件把协作 block 放到同一个 GPC,是生产者-消费者共置,
+            但那是<b>同一个 grid 内、按几何而非按运行时位置</b>;
+            AMD 的 <code>hsa_amd_queue_cu_set_mask</code>
+            是能让你<b>自己实现</b>生产者邻近放置的那个原语,策略仍归你写。
+          </p>
+          <p>
+            <b>学术前例是有的,不该说「找不到对应物」:</b>
+            <i>Locality-Aware CTA Clustering for Modern GPUs</i>(ASPLOS 2017)、
+            <i>Locality-Aware CTA Scheduling for Gaming Applications</i>(TACO 2021),
+            以及 persistent-threads 里的生产者-消费者共置。
+          </p>
+          <p>
+            最贴近的其实在 CPU 侧:<b>Palacharla 等人 ISCA'97 的 dependence-based steering</b>
+            —— 把依赖链导向<b>同一个 FIFO</b>(FIFO 再分布到 cluster 上,
+            <b>cluster 亲和是间接结果</b>,不是直接目标)。它的分配启发式是
+            「若源指令<b>后面没有别的指令</b>,就接到同一个 FIFO,否则新开一个」
+            —— <b>这几乎就是我们的兄弟槽放置加上「恰好一个槽在忙」的异或守卫</b>,只是在指令粒度。
+          </p>
+        </div>
+      </li>
+      <li>
+        <div>
+          <h3>同类型通道依赖的那条硬件性质</h3>
+          <p>
+            「核一变空,槽选择必须<b>立刻</b>回到槽 0,而不是下一个仲裁周期」
+            —— 加上软件侧永远先填槽 0。两条缺一,S 就可能先于 P 被取走。
+          </p>
+          <p>
+            这是我们引擎仲裁器的具体性质,两家都不暴露类似的东西。
+            原因也清楚:<b>他们的队列深、且由 packet processor 用包头的 barrier bit
+            显式串行化</b>,不需要依赖这种时序细节 —— 见第 04 页那两句规范措辞的对比。
+          </p>
+        </div>
+      </li>
+    </ol>
+
+    <div class="note note--own">
+      <b>一条结构性差别贯穿全部三处:他们的队列很深,我们的引擎只有两个槽。</b>
+      AQL 队列最大 131072 个包(MI300X),而 CUDA 侧没有公开的 per-stream 待启动上限
+      —— 唯一公开的四位数是 device runtime 的
+      <code>cudaLimitDevRuntimePendingLaunchCount</code>,默认 2048。
+      深队列可以「把 S 连着依赖一起塞进去然后不管了」;
+      我们只有一个兄弟槽、还得跟正常下发抢。
+      <b>这也是提示机制在我们这边比在他们那边更吃紧的原因</b>
+      (summary 给出的动因是 painter / dispatch 的职责切分与两轮通知回路;
+      队列深度这条是本文的补充观察)。
+    </div>
+  </section>
+
+  <!-- ══ 09 · 数据 ═════════════════════════════════════ -->
+  <section class="slide" data-title="数据与优先级">
+    <div class="eyebrow"><span class="n">09</span><span>数据与优先级</span></div>
+    <h2>93% 的边是跨类型</h2>
+
+    <div class="sub">机会的分布 —— 按边算</div>
+    <div class="tbl-wrap">
+      <table class="tbl">
+        <thead><tr><th>通道</th><th>边数</th><th>占全图 2742 条边</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><b>同类型</b></td>
+            <td class="val">180</td>
+            <td class="val">6.6%</td>
+          </tr>
+          <tr>
+            <td><b>跨类型</b></td>
+            <td class="val">2562</td>
+            <td class="val">93.4%</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="sub">实测漏斗 —— 提示与早发</div>
+    <div class="tbl-wrap">
+      <table class="tbl">
+        <thead><tr><th>通道</th><th>发布提示</th><th>实际早发</th><th>提示 → 早发</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><b>同类型</b></td>
+            <td class="val">48 – 90</td>
+            <td class="val">5 – 6</td>
+            <td class="val">约 5.6% – 12.5%</td>
+          </tr>
+          <tr>
+            <td><b>跨类型</b></td>
+            <td class="val">580 – 612</td>
+            <td class="val">180 – 280</td>
+            <td class="val">约 29% – 48%</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="note note--plain">
+      两张表<b>分母不同,不能横着比</b>:上表的分母是全图边数,下表的分母是发布出去的提示数。
+      若要看端到端的「边 → 早发」收益,还得再算一次:同类型 <span class="mono">5–6 / 180 ≈ 3%</span>,
+      跨类型 <span class="mono">180–280 / 2562 ≈ 7% – 11%</span> —— 都远低于提示转化率。
+      <br>
+      数据来源:提示数与早发数、以及 2742 与 180 取自 summary 第 07 页;
+      <b>2562、两个占比、三组转化率均为本文推算</b>。
+    </div>
+
+    <div class="note">
+      <p>
+        <b>便宜的那条通道几乎用不上,全部价值压在贵的那条上。</b>
+      </p>
+      <p>
+        同类型不需要任何信号,是两条里实现最干净的一条 —— 但它只覆盖 6.6% 的边,
+        实测每次运行只成功 5 – 6 次。而跨类型覆盖 93.4%,
+        却正是有 <b>bit → 计数器</b> 问题的那一条。
+      </p>
+      <p>
+        <b>结论:工程投入应该压在跨类型通道的健壮性上。</b>
+        我们自己排的优先级是对的,这组数据是它的量化支撑。
+      </p>
+    </div>
+
+    <div class="sub">建议补一个指标</div>
+    <p>
+      三个转化率都不高。<b>把「边 → 提示 → 早发」这条漏斗当常规指标</b>
+      比看端到端吞吐更能定位问题 —— 它把「没机会」、「有机会没发提示」和
+      「发了提示没接住」分成三段。
+    </p>
+    <p>
+      summary 里提到跨类型的队头阻塞<b>目前没有对策</b>
+      (放置那一刻要求两槽全空,但之后正常下发会把新任务排到还卡着的 S 后面,
+      让它继承整段等待)。这很可能就是最后一段损失的大头,值得先量化再动手。
+    </p>
+  </section>
+
+  <!-- ══ 10 · 资料 ═════════════════════════════════════ -->
+  <section class="slide" data-title="参考资料">
+    <div class="eyebrow"><span class="n">10</span><span>参考资料</span></div>
+    <h2>资料与读法</h2>
+
+    <div class="sub">AMD · HSA / AQL</div>
+    <ul class="src">
+      <li>
+        <span class="k">规范</span>
+        <span class="d">
+          <a href="http://hsafoundation.com/wp-content/uploads/2021/02/HSA-SysArch-1.2.pdf"
+             target="_blank" rel="noopener">HSA Platform System Architecture Specification 1.2</a>
+          —— <span class="star">主要读物</span>(2018-05-02)。§2.8 队列与 doorbell、
+          §2.9 packet 与 signal、Table 2-9 barrier packet 位域
+        </span>
+      </li>
+      <li>
+        <span class="k">头文件</span>
+        <span class="d">
+          <a href="https://github.com/HSAFoundation/HSA-Runtime-AMD/blob/master/include/hsa.h"
+             target="_blank" rel="noopener">hsa.h</a>
+          —— 本文的<b>结构体、barrier bit、handle-0、signal 位宽</b>引文均出自此处
+          (注意:这是<b>历史镜像</b>,在维护的是
+          <a href="https://github.com/ROCm/ROCR-Runtime" target="_blank" rel="noopener">ROCm/ROCR-Runtime</a>,
+          其中 <span class="mono">hsa.h</span> 的路径随分支不同)
+        </span>
+      </li>
+      <li>
+        <span class="k">运行时</span>
+        <span class="d">
+          <a href="https://rocm.docs.amd.com/projects/ROCR-Runtime/en/latest/api-reference/api.html"
+             target="_blank" rel="noopener">ROCR-Runtime API Reference</a>
+          —— AMD 扩展,含 <code>hsa_amd_barrier_value_packet_t</code>
+          与 <code>hsa_amd_queue_cu_set_mask</code>
+        </span>
+      </li>
+      <li>
+        <span class="k">开源实现</span>
+        <span class="d">
+          <a href="http://doxygen.gem5.org/release/current/group__aql.html"
+             target="_blank" rel="noopener">gem5 · AQL packet 结构体 doxygen</a>
+          —— 只有从 <span class="mono">hsa.h</span> 抄来的结构体定义;
+          <span class="star">真正的 packet processor 实现在</span>
+          <span class="mono">src/dev/hsa/hsa_packet_processor.cc</span>,
+          那才是和我们仿真器同类的工作
+        </span>
+      </li>
+    </ul>
+
+    <div class="sub">NVIDIA · CUDA</div>
+    <ul class="src">
+      <li>
+        <span class="k">原语</span>
+        <span class="d">
+          <a href="https://docs.nvidia.com/cuda/cuda-driver-api/group__CUDA__MEMOP.html"
+             target="_blank" rel="noopener">Stream Memory Operations(Driver API §6.22)</a>
+          —— <span class="star">先读这个</span>。GEQ 那段直接回答计数器该长什么样,
+          以及「同步顺序对 CUDA 不可见」那条警告
+        </span>
+      </li>
+      <li>
+        <span class="k">PDL</span>
+        <span class="d">
+          <a href="https://docs.nvidia.com/cuda/cuda-programming-guide/04-special-topics/programmatic-dependent-launch.html"
+             target="_blank" rel="noopener">Programmatic Dependent Launch and Synchronization(§4.5)</a>
+          —— 调度可见性与内存可读性的拆分;<b>§4.5.3 讲在 CUDA Graph 里用 edge data 表达 PDL 依赖</b>
+        </span>
+      </li>
+      <li>
+        <span class="k">图</span>
+        <span class="d">
+          <a href="https://docs.nvidia.com/cuda/cuda-programming-guide/04-special-topics/cuda-graphs.html"
+             target="_blank" rel="noopener">CUDA Graphs(§4.2)</a>
+          —— upload / instantiate / launch 的分工,设备侧启动及其 120 / 255 上限
+        </span>
+      </li>
+      <li>
+        <span class="k">工程用法</span>
+        <span class="d">
+          <a href="https://docs.nvidia.com/cutlass/latest/media/docs/cpp/dependent_kernel_launch.html"
+             target="_blank" rel="noopener">CUTLASS · Dependent kernel launches</a>
+          —— 正文只有两三百词,讲的是怎么<b>开启</b>
+          (<code>CUTLASS_ENABLE_GDC_FOR_SM90=1</code>、
+          <code>gemm.run(stream, nullptr, /*launch_with_pdl=*/true)</code>);
+          机制看上面那条。Example 63 的 weight prefetch 值得看
+        </span>
+      </li>
+    </ul>
+
+    <div class="sub">建议的读法</div>
+    <ol class="pts">
+      <li>
+        <div>
+          <h3>Stream Memory Operations · 约 10 分钟</h3>
+          <p>GEQ 那一段直接给出计数器该长什么样,以及为什么不需要清零。</p>
+        </div>
+      </li>
+      <li>
+        <div>
+          <h3>HSA Spec 1.2 的 §2.8 / §2.9</h3>
+          <p>
+            barrier bit 与 barrier-AND 是我们两条通道的规范级描述,连位域一起给;
+            「launch phase 顺序 → 完成顺序」那组对比尤其值得读。
+          </p>
+        </div>
+      </li>
+      <li>
+        <div>
+          <h3>有余力:gem5 的 <span class="mono">hsa_packet_processor.cc</span></h3>
+          <p>别人怎么在模拟器里实现包处理器 —— 和我们的仿真器是同类工作。</p>
+        </div>
+      </li>
+    </ol>
+
+    <div class="note note--plain">
+      本文只收公开资料,所有引文均标注了确切出处。
+      需要留意的一点:barrier bit 那句广为流传的措辞出自 <span class="mono">hsa.h</span> 的
+      文档注释,<b>不是</b>规范正文 —— 规范自己的说法见第 04 页,两者含义一致但用词不同。
+    </div>
+  </section>
+
+</main>
+
+<nav class="pager">
+  <button type="button" id="prev">← 上一页</button>
+  <span class="count" id="count"></span>
+  <button type="button" id="next">下一页 →</button>
+</nav>
+
+<script>
+(function () {
+  var slides = Array.prototype.slice.call(document.querySelectorAll('.slide'));
+  var rail = document.getElementById('rail');
+  var prev = document.getElementById('prev');
+  var next = document.getElementById('next');
+  var count = document.getElementById('count');
+  var modeSlide = document.getElementById('mode-slide');
+  var modeDoc = document.getElementById('mode-doc');
+  var at = 0;
+
+  slides.forEach(function (s, i) {
+    var li = document.createElement('li');
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.setAttribute('data-n', i + 1);
+    b.title = (i + 1) + ' · ' + (s.dataset.title || '');
+    b.setAttribute('aria-label', '第 ' + (i + 1) + ' 页:' + (s.dataset.title || ''));
+    if (s.querySelector('.todo')) li.setAttribute('data-todo', '');
+    b.addEventListener('click', function () { go(i); });
+    li.appendChild(b);
+    rail.appendChild(li);
+  });
+
+  var ticks = Array.prototype.slice.call(rail.children);
+
+  function go(i) {
+    at = Math.max(0, Math.min(slides.length - 1, i));
+    slides.forEach(function (s, k) {
+      if (k === at) s.setAttribute('data-current', ''); else s.removeAttribute('data-current');
+    });
+    ticks.forEach(function (t, k) {
+      if (k === at) t.setAttribute('data-on', ''); else t.removeAttribute('data-on');
+    });
+    prev.disabled = at === 0;
+    next.disabled = at === slides.length - 1;
+    count.textContent = String(at + 1).padStart(2, '0') + ' / ' + String(slides.length).padStart(2, '0');
+    if (document.body.dataset.mode === 'doc') {
+      slides[at].scrollIntoView({ block: 'start', behavior: 'auto' });
+    } else {
+      window.scrollTo(0, 0);
+    }
+  }
+
+  prev.addEventListener('click', function () { go(at - 1); });
+  next.addEventListener('click', function () { go(at + 1); });
+
+  document.addEventListener('keydown', function (e) {
+    if (e.target.closest('button')) return;
+    if (e.key === 'ArrowRight' || e.key === 'PageDown') { go(at + 1); e.preventDefault(); }
+    if (e.key === 'ArrowLeft' || e.key === 'PageUp') { go(at - 1); e.preventDefault(); }
+  });
+
+  function setMode(m) {
+    document.body.dataset.mode = m;
+    modeSlide.setAttribute('aria-pressed', String(m === 'slide'));
+    modeDoc.setAttribute('aria-pressed', String(m === 'doc'));
+    if (m === 'slide') window.scrollTo(0, 0);
+  }
+  modeSlide.addEventListener('click', function () { setMode('slide'); });
+  modeDoc.addEventListener('click', function () { setMode('doc'); });
+
+  setMode('slide');
+  go(0);
+})();
+</script>
