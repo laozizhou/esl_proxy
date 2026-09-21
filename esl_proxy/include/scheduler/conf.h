@@ -19,7 +19,14 @@
 #define RQ_BATCH_SIZE 512
 #define DISPATCH_COMPLETE_BATCH 512
 
+/* CLC (Makefile_clc) builds against the cases/... _total_graph.h headers, which carry a
+ * `#if PAINTER_THREAD_CNT != 1 / #error` guard. Without this #ifndef the value below
+ * unconditionally overrides -DPAINTER_THREAD_CNT=1 from the command line and that header
+ * can never be compiled. Same fix already applied to LOG_OUTPUT_MODE below.
+ * The scheduler build passes no such -D, so it still gets 2. */
+#ifndef PAINTER_THREAD_CNT
 #define PAINTER_THREAD_CNT 2
+#endif
 #define DISPATCH_THREAD_CNT 2
 #define AIC_CNT_PER_THREAD 32
 

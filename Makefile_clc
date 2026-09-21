@@ -1,0 +1,136 @@
+# Makefile for the CLC (dv121) AICPU-side task-list preparer.
+#
+# CLC flips scheduling from "AICPU pushes" to "AICore pulls": AICPU's only remaining job is to
+# read the DAG out of a cases/*_total_graph.h, sort it, and write the task list into GM. This
+# builds just that one step. Nothing here is shared with the algorithm/ or scheduler/ trees -
+# the whole point is that this draft can be deleted or moved out wholesale.
+#
+# Usage:
+#   make -f Makefile_clc                       # compile only
+#   make -f Makefile_clc run                   # compile + run; report also saved to log/clc_run.txt
+#   make -f Makefile_clc dump                  # same, plus the table to log/clc_table.csv
+#   make -f Makefile_clc CLC_USE_DURATION=0 run    # fall back to level order (ignore duration)
+#   make -f Makefile_clc CASE=paged_attention_total_graph.h run   # build against another case
+#   make -f Makefile_clc clean
+
+CC := cc
+
+# -DPAINTER_THREAD_CNT=1 is required, not optional: cases/*_total_graph.h carries a
+#   #if PAINTER_THREAD_CNT != 1 / #error
+# guard, and it includes scheduler/conf.h which defines the macro. conf.h had to grow an
+# #ifndef around PAINTER_THREAD_CNT for this -D to survive - same fix LOG_OUTPUT_MODE already
+# needed (see notes/multi_pred.md). The scheduler build passes no -D, so it still gets 2.
+#
+# -MMD -MP emits a .d beside each .o listing the headers it pulled in, so editing clc_task.h
+# (the AICPU/AICore shared ABI header) or the case header actually triggers a rebuild.
+CFLAGS := -g -std=c11 -Wall -Wextra -pedantic -O2 \
+          -I esl_proxy/include \
+          -DPAINTER_THREAD_CNT=1 \
+          -MMD -MP
+
+# CLC_USE_DURATION=1 (the default, set in clc_prepare.c) sorts by est - earliest start time,
+# which weights each dependency hop by the predecessor's duration. Setting it to 0 makes every
+# weight 1, which degenerates est into the plain topological level number. Keep both reachable:
+# if real-hardware profiling shows the duration estimates are worse than about +/-100% off, the
+# duration-blind level order is the better choice.
+ifneq ($(CLC_USE_DURATION),)
+ifneq ($(filter-out 0 1,$(CLC_USE_DURATION)),)
+$(error CLC_USE_DURATION must be 0 or 1, got '$(CLC_USE_DURATION)')
+endif
+CFLAGS += -DCLC_USE_DURATION=$(CLC_USE_DURATION)
+endif
+
+# CASE picks which cases/*_total_graph.h to build against. Must be a *_total_graph.h: the
+# subgraph variants require PAINTER_THREAD_CNT==2 and have already folded mix into cube.
+# clc_prepare.c guards its own #define with #ifndef so this wins.
+ifneq ($(CASE),)
+CFLAGS += -DCLC_CASE_HDR='"cases/$(CASE)"'
+endif
+
+ifneq ($(EXTRA_CFLAGS),)
+CFLAGS += $(EXTRA_CFLAGS)
+endif
+
+BIN_DIR := bin
+OBJ_DIR := $(BIN_DIR)/clc
+LOG_DIR := log
+
+# Platform detection via uname, the same way the other two Makefiles in this repo do it.
+# Do NOT use $(OS) here: MSYS2's /usr/bin/make strips OS, TMP and TEMP out of its environment,
+# so $(OS) reads back empty under the very toolchain this is built with. uname -s survives
+# (it reports MINGW64_NT-10.0-... here); Linux and Darwin contain no "NT".
+UNAME_S := $(shell uname -s)
+
+ifneq ($(findstring NT,$(UNAME_S)),)
+# The linker appends .exe on Windows, so without this `all` would think the target was never
+# built (relinking every time) and `clean` would delete a name that does not exist. Evidence in
+# this repo: Makefile_scheduler names its target bin/scheduler_test, and bin/ holds only
+# scheduler_test.exe.
+EXE := .exe
+
+# Same stripping bites gcc: with TMP and TEMP both gone it has nowhere to put its intermediates,
+# falls back to C:\WINDOWS\ and dies with "Cannot create temporary file ... Permission denied"
+# (exit 127). Hand it a writable directory. A relative path is deliberate - it sidesteps the
+# MSYS-vs-native path-format question entirely, recipes run with the working directory at the
+# Makefile's own, and $(OBJ_DIR) both exists before anything compiles (order-only prerequisite
+# below) and is what `clean` removes, so strays cannot accumulate.
+# Only applied when TMP is actually missing, so a make that does pass it through is left alone.
+ifeq ($(strip $(TMP)),)
+export TMP  := $(OBJ_DIR)
+export TEMP := $(OBJ_DIR)
+endif
+else
+EXE :=
+endif
+
+TARGET := $(BIN_DIR)/clc_prepare$(EXE)
+
+SRCS := esl_proxy/src/clc/clc_prepare.c
+OBJS := $(patsubst esl_proxy/src/clc/%.c,$(OBJ_DIR)/%.o,$(SRCS))
+DEPS := $(OBJS:.o=.d)
+
+# Rebuild when the compile-time configuration changes, not just when a source file does.
+# Without this, `make run` followed by `make CLC_USE_DURATION=0 run` finds the .o up to date
+# and silently re-runs the previous build - i.e. the A/B comparison the switch exists for
+# would quietly compare a thing against itself. Same pattern as esl_proxy/Makefile's ORCH_STAMP.
+CLC_STAMP  := $(OBJ_DIR)/.clc-stamp
+CLC_CONFIG := dur=$(CLC_USE_DURATION) case=$(CASE) extra=$(EXTRA_CFLAGS)
+
+.PHONY: all run dump clean force
+
+all: $(TARGET)
+
+$(TARGET): $(OBJS) | $(BIN_DIR)
+	$(CC) $(CFLAGS) $(OBJS) -o $@
+
+$(OBJ_DIR)/%.o: esl_proxy/src/clc/%.c | $(OBJ_DIR)
+	@mkdir -p $(@D)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(OBJS): $(CLC_STAMP)
+$(CLC_STAMP): force | $(OBJ_DIR)
+	@echo '$(CLC_CONFIG)' | cmp -s - $@ 2>/dev/null || echo '$(CLC_CONFIG)' > $@
+
+$(BIN_DIR) $(OBJ_DIR):
+	mkdir -p $@
+
+# Both targets also drop their output under log/ (gitignored, alongside the scheduler's own
+# logs) so the result is a file you can open, not just terminal scrollback. The `s=$$?` dance
+# preserves the program's exit code, which `| tee` would swallow - a failed self-check must
+# still fail the build.
+run: all
+	@mkdir -p $(LOG_DIR)
+	@$(TARGET) > $(LOG_DIR)/clc_run.txt 2>&1; s=$$?; cat $(LOG_DIR)/clc_run.txt; 	 echo "[make] -> $(LOG_DIR)/clc_run.txt"; exit $$s
+
+# --dump sends the human report to stderr and the CSV to stdout, so the two land in separate
+# files with no post-processing.
+dump: all
+	@mkdir -p $(LOG_DIR)
+	@$(TARGET) --dump 2> $(LOG_DIR)/clc_run.txt > $(LOG_DIR)/clc_table.csv; s=$$?; 	 cat $(LOG_DIR)/clc_run.txt; 	 echo "[make] -> $(LOG_DIR)/clc_table.csv ($$(wc -l < $(LOG_DIR)/clc_table.csv) lines)"; 	 exit $$s
+
+# Only ever touches this feature's own artifacts - bin/ also holds the orchestrator and
+# scheduler binaries from the other two Makefiles.
+clean:
+	rm -rf $(OBJ_DIR) $(TARGET)
+
+-include $(DEPS)
