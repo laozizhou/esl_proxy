@@ -23,20 +23,19 @@ ifeq ($(EARLY_DISPATCH),1)
 CFLAGS   += -DEARLY_DISPATCH
 endif
 
-# EARLY_DISPATCH_MULTI_PRED=1 generalizes the same-type-predecessor identity test from "exactly
-# one" to "one or more": early_dispatch_init() builds a CSR list of same-type predecessors per
-# task instead of a single candidate, and early_publish_hint() walks that list at the indegree==1
-# trigger instead of checking one fixed candidate.
+# EARLY_DISPATCH_MULTI_PRED used to select a CSR list of same-type predecessors over a single
+# precomputed candidate. The g_pred_xor[] accumulator identifies the surviving predecessor
+# directly, so the two cases collapsed into one and the flag is gone. Accepted and ignored here so
+# older command lines keep working.
 ifeq ($(EARLY_DISPATCH_MULTI_PRED),1)
-CFLAGS   += -DEARLY_DISPATCH -DEARLY_DISPATCH_MULTI_PRED
+CFLAGS   += -DEARLY_DISPATCH
 endif
 
-# EARLY_DISPATCH_CROSS_TYPE=1 lets early_publish_hint() fall back to a second CSR list of
-# cross-type predecessors when the same-type list comes up empty, publishing into a separate
-# g_cross_hint[] instead of g_early_hint[]. Requires EARLY_DISPATCH_MULTI_PRED - the fallback
-# walk reuses that CSR-list pattern, so it is pulled in automatically.
+# EARLY_DISPATCH_CROSS_TYPE=1 adds g_cross_hint[], the second hint table. early_publish_hint()
+# compares the surviving predecessor's type against the successor's and routes into it when they
+# differ; without this flag a cross-type survivor simply publishes nothing.
 ifeq ($(EARLY_DISPATCH_CROSS_TYPE),1)
-CFLAGS   += -DEARLY_DISPATCH -DEARLY_DISPATCH_MULTI_PRED -DEARLY_DISPATCH_CROSS_TYPE
+CFLAGS   += -DEARLY_DISPATCH -DEARLY_DISPATCH_CROSS_TYPE
 endif
 
 # SIM_LATENCY=1 replaces the fake return (task retires the round after it is sent) with an

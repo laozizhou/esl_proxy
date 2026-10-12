@@ -1,3 +1,4 @@
+#include <assert.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -9,34 +10,21 @@
 #include "scheduler/early_dispatch.h"
 #include "common/log.h"
 
-#ifdef EARLY_DISPATCH_MULTI_PRED
-uint32_t g_early_st_cnt[RING_SIZE];
-uint32_t g_early_st_idx[RING_SIZE];
-uint32_t *g_early_st_flat;
+uint32_t g_pred_xor[RING_SIZE];
 #ifdef EARLY_DISPATCH_CROSS_TYPE
-uint32_t g_early_ct_cnt[RING_SIZE];
-uint32_t g_early_ct_idx[RING_SIZE];
-uint32_t *g_early_ct_flat;
 uint32_t g_cross_hint[RING_SIZE];
 uint32_t g_cross_hints_published;
-#endif
-#else
-uint32_t g_early_st_pred[RING_SIZE];
 #endif
 uint32_t g_early_hint[RING_SIZE];
 uint8_t g_early_type[RING_SIZE];
 uint32_t g_early_hints_published;
 
-/* Precompute every task's same-type predecessors. This is a static property of the graph, so
- * doing it once here means the runtime hook never has to walk a predecessor list, and in
- * particular resolve_dep() - which only has a global task id and no local subgraph index - needs
- * no id -> local-index map. */
+/* Fill the task-type table and clear both hint tables. Nothing about predecessors is precomputed
+ * any more: g_pred_xor[] is seeded per task in add_successors(), over the predecessors that are
+ * actually still unfinished at commit time, which is the same set g_predecessor_cnt[] counts. */
 void early_dispatch_init(void)
 {
     for (uint32_t i = 0; i < RING_SIZE; i++) {
-#ifndef EARLY_DISPATCH_MULTI_PRED
-        g_early_st_pred[i] = EARLY_NONE;
-#endif
         g_early_hint[i] = EARLY_NONE;
 #ifdef EARLY_DISPATCH_CROSS_TYPE
         g_cross_hint[i] = EARLY_NONE;
@@ -47,65 +35,6 @@ void early_dispatch_init(void)
             g_early_type[test_graph[sg].task_id[i]] = (uint8_t)test_graph[sg].type[i];
         }
     }
-#ifdef EARLY_DISPATCH_MULTI_PRED
-    uint32_t total_edges = 0;
-    for (int sg = 0; sg < PAINTER_THREAD_CNT; sg++) {
-        for (uint32_t i = 0; i < test_graph[sg].task_cnt; i++) {
-            total_edges += (uint32_t)test_graph[sg].pre_cnt[i];
-        }
-    }
-    g_early_st_flat = malloc(sizeof(uint32_t) * total_edges);
-#ifdef EARLY_DISPATCH_CROSS_TYPE
-    g_early_ct_flat = malloc(sizeof(uint32_t) * total_edges);
-#endif
-
-    uint32_t flat_cursor = 0;
-#ifdef EARLY_DISPATCH_CROSS_TYPE
-    uint32_t ct_flat_cursor = 0;
-#endif
-    for (int sg = 0; sg < PAINTER_THREAD_CNT; sg++) {
-        for (uint32_t i = 0; i < test_graph[sg].task_cnt; i++) {
-            uint32_t id = test_graph[sg].task_id[i];
-            uint32_t start = flat_cursor;
-#ifdef EARLY_DISPATCH_CROSS_TYPE
-            uint32_t ct_start = ct_flat_cursor;
-#endif
-            for (int k = 0; k < test_graph[sg].pre_cnt[i]; k++) {
-                uint32_t q = (uint32_t)test_graph[sg].predecessors[test_graph[sg].pre_idx[i] + k];
-                if (g_early_type[q] == g_early_type[id]) {
-                    g_early_st_flat[flat_cursor++] = q;
-                }
-#ifdef EARLY_DISPATCH_CROSS_TYPE
-                else {
-                    g_early_ct_flat[ct_flat_cursor++] = q;
-                }
-#endif
-            }
-            g_early_st_idx[id] = start;
-            g_early_st_cnt[id] = flat_cursor - start;
-#ifdef EARLY_DISPATCH_CROSS_TYPE
-            g_early_ct_idx[id] = ct_start;
-            g_early_ct_cnt[id] = ct_flat_cursor - ct_start;
-#endif
-        }
-    }
-#else
-    for (int sg = 0; sg < PAINTER_THREAD_CNT; sg++) {
-        for (uint32_t i = 0; i < test_graph[sg].task_cnt; i++) {
-            uint32_t id = test_graph[sg].task_id[i];
-            uint32_t found = EARLY_NONE;
-            int n = 0;
-            for (int k = 0; k < test_graph[sg].pre_cnt[i]; k++) {
-                uint32_t q = (uint32_t)test_graph[sg].predecessors[test_graph[sg].pre_idx[i] + k];
-                if (g_early_type[q] == g_early_type[id]) {
-                    n++;
-                    found = q;
-                }
-            }
-            g_early_st_pred[id] = (n == 1) ? found : EARLY_NONE;
-        }
-    }
-#endif
 }
 
 task_state* g_state_buf[PAINTER_THREAD_CNT];
@@ -131,69 +60,57 @@ extern atomic_bool g_is_done;
 uint32_t  g_predecessor_cnt[RING_SIZE];
 uint32_t completed_task_cnt = 0;
 
-/* Publish a hint when S's live indegree is 1 and the single remaining unfinished predecessor is
- * same-type.
+/* Publish a hint when S's live indegree reaches 1. The single remaining unfinished predecessor is
+ * whatever g_pred_xor[] holds at that moment; its type decides which of the two hint tables the
+ * hint lands in, and without EARLY_DISPATCH_CROSS_TYPE a cross-type survivor publishes nothing.
  *
  * Called from BOTH the decrement site and the commit site. The commit site is not redundant: a
  * task in a pure chain (A <- B <- C <- D) has exactly one predecessor, so its indegree is 1 from
  * initialisation and never transitions to 1. Hooking only the decrement site would silently miss
  * every pure chain. */
-#ifdef EARLY_DISPATCH_MULTI_PRED
-/* Walking S's same-type predecessor list needs no extra bookkeeping beyond what the caller
- * already guarantees: indegree 1 caps the number of still-unfinished predecessors (any type) at
- * exactly one, so at most one entry in this list can be unfinished. Finding none means the
- * survivor is cross-type. */
-static inline void early_publish_hint(int tid, uint32_t s)
+/* The surviving predecessor comes straight out of the accumulator: indegree 1 means exactly one
+ * predecessor is still unfinished, and every completed one has been XORed in once and back out
+ * once. There is no list to walk, and no per-painter task state to consult - which is why this
+ * takes no tid: g_pred_xor[S] is written only by the painter that owns S, so there is no second
+ * view of it to disagree with.
+ *
+ * Dropping the per-painter state lookup is also a fix, not just a simplification. The old walk
+ * tested g_state_buf[tid][p].state, and update_task_state() marks a whole completion batch
+ * COMPLETED before resolve_dep() applies any of that batch's decrements. With two predecessors of
+ * S retiring in one batch, the decrement that took S to indegree 1 found the true survivor already
+ * flagged COMPLETED, both lists came up empty, and no hint was published at all - about a fifth of
+ * them, on this graph.
+ *
+ * The type split that two separate predecessor lists used to encode is now one comparison. */
+static inline void early_publish_hint(uint32_t s)
 {
-    uint32_t cnt = g_early_st_cnt[s];
-    uint32_t base = g_early_st_idx[s];
+    uint32_t p = g_pred_xor[s & RING_MASK];
 
-    for (uint32_t k = 0; k < cnt; k++) {
-        uint32_t p = g_early_st_flat[base + k];
-        if (g_state_buf[tid][p].state != TASK_STATUS_COMPLETED) {
-            g_early_hint[p] = s;
-            g_early_hints_published++;
-            WORKER_LOGF("early,hint,successor,%u,predecessor,%u", s, p);
-            return;
-        }
+    /* p indexes g_early_type[] and keys the hint tables, both sized RING_SIZE, so it has to be in
+     * range. With every task id below RING_SIZE this cannot trip - XOR never sets a bit none of
+     * its operands had - and it is here for the day ids wrap the ring, where the accumulator would
+     * mix two generations and hand back something out of range.
+     *
+     * It deliberately does NOT claim to catch a lost or doubled XOR: those yield an unrelated but
+     * perfectly in-range id, sail past this, and publish a hint naming a task that is not S's
+     * predecessor. Catching that needs a second accumulator using +/- instead of ^, since XOR
+     * cancels exactly the errors it would have to detect. */
+    assert(p < RING_SIZE);
+
+    if (g_early_type[p] == g_early_type[s]) {
+        g_early_hint[p] = s;
+        g_early_hints_published++;
+        WORKER_LOGF("early,hint,successor,%u,predecessor,%u", s, p);
     }
-
 #ifdef EARLY_DISPATCH_CROSS_TYPE
-    /* Same-type list came up empty, so if indegree is really 1 the survivor is cross-type. Walk
-     * g_early_ct_flat the same way and publish into g_cross_hint instead of g_early_hint. */
-    uint32_t ct_cnt = g_early_ct_cnt[s];
-    uint32_t ct_base = g_early_ct_idx[s];
-
-    for (uint32_t k = 0; k < ct_cnt; k++) {
-        uint32_t p = g_early_ct_flat[ct_base + k];
-        if (g_state_buf[tid][p].state != TASK_STATUS_COMPLETED) {
-            g_cross_hint[p] = s;
-            g_cross_hints_published++;
-            WORKER_LOGF("early,cross_hint,successor,%u,predecessor,%u", s, p);
-            return;
-        }
+    else {
+        g_cross_hint[p] = s;
+        g_cross_hints_published++;
+        WORKER_LOGF("early,cross_hint,successor,%u,predecessor,%u", s, p);
     }
+    /* Without CROSS_TYPE a cross-type survivor publishes nothing, same as before. */
 #endif
 }
-#else
-/* The identity test is cheap thanks to g_early_st_pred: if S has exactly one same-type
- * predecessor P and S's live indegree is 1, then the single remaining unfinished predecessor is P
- * precisely when P is not COMPLETED. Any other survivor would be cross-type and rejected by the
- * same-type rule anyway, so there is no need to walk the predecessor list at runtime. */
-static inline void early_publish_hint(int tid, uint32_t s)
-{
-    uint32_t p = g_early_st_pred[s];
-    if (p == EARLY_NONE) {
-        return;                          /* no same-type predecessor, or more than one */
-    }
-    if (g_state_buf[tid][p].state == TASK_STATUS_COMPLETED) {
-        return;                          /* the survivor is some other, cross-type, predecessor */
-    }
-    g_early_hint[p] = s;
-    g_early_hints_published++;
-    WORKER_LOGF("early,hint,successor,%u,predecessor,%u", s, p);
-}
-#endif
 
 static inline bool update_task_state(int tid, uint32_t cnt, uint32_t* cq_buf)
 {
@@ -245,6 +162,7 @@ void add_successors(int tid, uint32_t ready_cnt[], uint32_t rq_buf[][RQ_BATCH_SI
             continue;
         }
         uint32_t predecessor_cnt = 0;
+        uint32_t pred_xor = 0;
 
         for (int i = 0; i < pre_cnt; i++)
         {
@@ -256,10 +174,12 @@ void add_successors(int tid, uint32_t ready_cnt[], uint32_t rq_buf[][RQ_BATCH_SI
                 g_successor_buf[tid][precessor_idx].node[successor_idx] = id;
                 g_state_buf[tid][precessor_idx].successor_cnt++;
                 predecessor_cnt++;
+                pred_xor ^= precessor_idx;
                 WORKER_LOGF("add,task_id,%u,successor_cnt,%u,successor_id,%u", precessor_idx, g_successor_buf[tid][precessor_idx].cnt, id);
             }
         }
         g_predecessor_cnt[id] = predecessor_cnt;
+        g_pred_xor[id & RING_MASK] = pred_xor;
         if (predecessor_cnt <= 0)
         {
             task_type_t type = test_graph[tid].type[commited_idx];
@@ -271,7 +191,7 @@ void add_successors(int tid, uint32_t ready_cnt[], uint32_t rq_buf[][RQ_BATCH_SI
         {
             /* Indegree is 1 at commit time, so it will never transition to 1 later - this is the
              * only chance to publish. Every task in a pure chain lands here. */
-            early_publish_hint(tid, id);
+            early_publish_hint(id);
         }
         commited_idx++;
     }
@@ -306,10 +226,11 @@ void resolve_dep(int tid, uint32_t cnt, uint32_t* cq_buf, uint32_t rq_buf[][RQ_B
         for (uint32_t k = 0; k < succ_cnt; k++) {
             succ_id = g_successor_buf[tid][idx].node[k];
             g_predecessor_cnt[succ_id & RING_MASK]--;
+            g_pred_xor[succ_id & RING_MASK] ^= task_id;
             WORKER_LOGF("painter,task_id,%u,successor_id,%u,predecessor_cnt,%u", task_id, succ_id, g_predecessor_cnt[succ_id & RING_MASK]);
             if (g_predecessor_cnt[succ_id & RING_MASK] == 1) {
                 /* Just became almost-ready: exactly one unfinished predecessor left. */
-                early_publish_hint(tid, succ_id);
+                early_publish_hint(succ_id);
             }
             if (g_predecessor_cnt[succ_id & RING_MASK] < 1) {
                 task_type_t type = g_state_buf[tid][succ_id].type;

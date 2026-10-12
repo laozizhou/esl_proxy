@@ -3,7 +3,7 @@
  *
  * Split of ownership, which is what keeps this lock-free:
  *
- *   g_early_st_pred[]     built once at init, read-only afterwards
+ *   g_pred_xor[]          maintained by painter alongside g_predecessor_cnt[]
  *   g_early_hint[]        published by painter, consumed (and cleared) by dispatch
  *   g_early_dispatched[]  written and read only by dispatch, at its single send point
  *
@@ -24,25 +24,26 @@
 
 #define EARLY_NONE 0xFFFFFFFFu
 
-#ifdef EARLY_DISPATCH_MULTI_PRED
-/* Same-type predecessors of a task, stored CSR-style: task id's slice is
- * g_early_st_flat[g_early_st_idx[id] .. g_early_st_idx[id] + g_early_st_cnt[id]).
- * A static property of the graph: built once by early_dispatch_init(). */
-extern uint32_t g_early_st_cnt[RING_SIZE];
-extern uint32_t g_early_st_idx[RING_SIZE];
-extern uint32_t *g_early_st_flat;
-#ifdef EARLY_DISPATCH_CROSS_TYPE
-/* Cross-type (different-type) predecessors of a task, same CSR layout as g_early_st_*, built in
- * the same pass over the same predecessor lists - every edge lands in exactly one of the two. */
-extern uint32_t g_early_ct_cnt[RING_SIZE];
-extern uint32_t g_early_ct_idx[RING_SIZE];
-extern uint32_t *g_early_ct_flat;
-#endif
-#else
-/* Unique same-type predecessor of a task, or EARLY_NONE when it does not have exactly one.
- * A static property of the graph: computed once by early_dispatch_init(). */
-extern uint32_t g_early_st_pred[RING_SIZE];
-#endif
+/* XOR of the task's not-yet-completed predecessors. Maintained strictly alongside
+ * g_predecessor_cnt[]: both are seeded in add_successors() over the same predecessors, and both
+ * are updated on the same line of resolve_dep(). When the count reaches 1 the accumulator holds
+ * the one survivor, because every other predecessor has been XORed in once and out once.
+ *
+ * This replaces two CSR predecessor lists (same-type and cross-type) plus the scan that walked
+ * them looking for an unfinished entry. The type split those lists encoded is now a single
+ * comparison at publish time, g_early_type[p] vs g_early_type[s].
+ *
+ * It inherits exactly the ownership rules of g_predecessor_cnt[]: every slot is single-writer.
+ * add_successors(tid) only commits tasks tid owns, and resolve_dep(tid) only walks successors that
+ * add_successors(tid) itself recorded, so the painter that owns S is the only one that ever
+ * touches g_pred_xor[S]. That, not the fact that the two arrays are updated on adjacent lines, is
+ * what makes a plain non-atomic uint32_t sound here. See invariant 6 in the ownership note above
+ * before letting a second dispatch thread resolve edges into the same slot.
+ *
+ * The failure modes are not symmetric. A lost decrement shows up loudly as a count that never
+ * reaches zero. A lost or doubled XOR yields an unrelated but in-range task id, publishes a hint
+ * naming a non-predecessor, and surfaces only as an ordering-oracle failure much later. */
+extern uint32_t g_pred_xor[RING_SIZE];
 
 /* Keyed by the PREDECESSOR: g_early_hint[P] == S means "S is waiting only on P". Keying by P is
  * what lets dispatch consume the hint at a point where it already holds (type, core, slot), so
@@ -51,12 +52,13 @@ extern uint32_t g_early_hint[RING_SIZE];
 
 #ifdef EARLY_DISPATCH_CROSS_TYPE
 /* Keyed by the PREDECESSOR, same convention as g_early_hint: g_cross_hint[P] == S means "S is
- * waiting only on P, and P is a different type from S". Published by early_publish_hint() only
- * when the same-type list (g_early_st_flat) came up empty at the indegree==1 trigger. */
+ * waiting only on P, and P is a different type from S". early_publish_hint() routes into this
+ * table rather than g_early_hint when the survivor turns out to be the other type. */
 extern uint32_t g_cross_hint[RING_SIZE];
 #endif
 
-/* Task type by global id, needed to apply the same-type rule while building g_early_st_pred. */
+/* Task type by global id, needed to route a published hint into the same-type or cross-type
+ * table once the accumulator has identified the surviving predecessor. */
 extern uint8_t g_early_type[RING_SIZE];
 
 /* Set at dispatch's single send point, covering both the early and the normal path. This is the
