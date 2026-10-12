@@ -4,6 +4,7 @@
  * Worker thread entry point for Dispatch.
  * This file is compiled separately as it contains pthread-specific code.
  */
+#include <assert.h>
 #include <stdint.h>
 #include <stdio.h>
 
@@ -26,9 +27,9 @@ uint32_t g_early_skipped_dup;
 #ifdef EARLY_DISPATCH_CROSS_TYPE
 uint32_t g_cross_plants;
 
-/* The cross-type notify wait (waiting_notify/g_cross_notify, see sim_tick()) only exists under
+/* The cross-type wait (wait_target/g_sim_cnt, see sim_tick()) only exists under
  * the SIM_LATENCY arbiter. Without it, place_task()'s fake-return path marks a task complete the
- * round after it is sent regardless of needs_notify, so a cross-type S would "finish" without
+ * round after it is sent regardless of wait_target, so a cross-type S would "finish" without
  * ever actually waiting for P - silently wrong, not just untested. REAL_CHIP has no notify wiring
  * yet either (see cross_dispatch.md future work), so it is excluded the same way. */
 #if !(defined(SIM_LATENCY) && !defined(REAL_CHIP))
@@ -174,6 +175,26 @@ static void hand_shake(int cpu_idx, uint64_t* aicore_spr[], int type, int ostd2_
     }
 }
 
+#ifdef EARLY_DISPATCH_CROSS_TYPE
+/* Placement counter per engine, the dispatch thread's own shadow of the engine retire counter:
+ * incremented once per place_task(), never read back from the simulator or from hardware. Every
+ * task placed on an engine retires on it exactly once, so "P was the j-th task placed here" and
+ * "that engine's retire counter reaches j" are the same event, and j is a pure function of this
+ * thread's own placement history. That is what lets a cross-type waiter be armed with an absolute
+ * target without ever reading a counter, so there is no read-modify-write window for a retirement
+ * to slip through between observing P and arming its successor. The value a waiter is armed with
+ * comes from g_place_seq[P], not from g_placed[] at arming time - see plant_pass().
+ *
+ * It rests on one property: on a given engine, retirement order equals placement order. The 2-slot
+ * arbiter provides it (non-preemptive, the phase pointer advances only on retirement, and
+ * send_task() prefers slot 0 so software fill order matches hardware pickup order) - the same
+ * property same-type early dispatch already depends on, which is why binding the counter to the
+ * engine rather than to the slot adds no new assumption. g_place_seq[] records the number handed
+ * out so sim_tick() can assert the property on every retirement rather than trusting it. */
+static uint32_t g_placed[DISPATCH_THREAD_CNT][EXE_TYPE_CNT][AIC_CNT];
+static uint32_t g_place_seq[RING_SIZE];
+#endif
+
 #if defined(SIM_LATENCY) && !defined(REAL_CHIP)
 /* ---------------------------------------------------------------------------
  * Simulated AICore execution.
@@ -211,44 +232,74 @@ typedef struct {
     uint16_t remaining;
     uint8_t occupied;
     uint8_t started;
-    uint8_t waiting_notify;   /* cross-type early dispatch: occupied but held until the paired unit signals */
+    uint32_t wait_target;     /* cross-type early dispatch: hold until the paired engine's retire
+                               * counter reaches this value. 0 = not waiting - an unsigned counter
+                               * is always >= 0, so the comparison simply never holds. uint32_t
+                               * keeps sim_slot_t at 12 bytes; placements per engine are bounded
+                               * by the task count. */
 } sim_slot_t;
 
 static sim_slot_t g_sim[DISPATCH_THREAD_CNT][EXE_TYPE_CNT][AIC_CNT][AIC_OSTD];
 static uint8_t g_sim_next[DISPATCH_THREAD_CNT][EXE_TYPE_CNT][AIC_CNT];
 static uint64_t g_sim_now[DISPATCH_THREAD_CNT];
 
-/* Cross-type completion mailbox, 1:1 cube<->vector pairing (core i of one type pairs with core i
- * of the other; EXE_TYPE_CNT==2 so type^1 is always the paired type). g_cross_notify[tid][type][core]
- * is a mailbox addressed TO (type, core): the OTHER type's retiring slot writes 1 here, this slot
- * reads and clears it. Unconditional on the writer's side - the writer cannot know whether anyone
- * is waiting, so it always posts even when nothing is listening; staleness is prevented by
- * clearing this same mailbox in sim_place() the moment a wait begins, not by anything in
- * sim_tick() - a "clear when I start" rule would be too late, since a mailbox belonging to a
- * (type, core) that has never run anything yet can already read 1 from unrelated past traffic
- * on the paired unit. */
-static uint8_t g_cross_notify[DISPATCH_THREAD_CNT][EXE_TYPE_CNT][AIC_CNT];
+/* Retire counter per engine, monotone and never cleared: g_sim_cnt[tid][type][core] counts the
+ * tasks that have retired on engine (type, core). A cross-type successor resident on (type, core)
+ * compares its target against its paired engine's counter, g_sim_cnt[tid][type ^ 1][core]. The
+ * pairing is 1:1 by core index - core i of one type pairs with core i of the other, and
+ * EXE_TYPE_CNT==2 makes type^1 always the paired type. A real 1:2 topology breaks both halves.
+ *
+ * What replaces the one-bit mailbox is the VALUE, not the direction. Nothing ever clears this, so
+ * neither failure direction of the mailbox survives: there is no stale 1 to read, and no real 1
+ * that can be cleared out from under a waiter. A waiter armed after the signal would have been
+ * sent is still correct, because it compares against an absolute value instead of waiting for an
+ * edge. None of that depends on who performs the write.
+ *
+ * The simulator models it as a value each engine owns and the paired engine reads, which is the
+ * compact form - but "can an engine READ its pair's register" is listed as unconfirmed in
+ * notes/sim_tick.md section 4. It does not have to be read. The retiring engine can instead PUSH
+ * its new counter value into the paired engine's SPR unconditionally, exactly as the old mailbox
+ * pushed a bit, and the waiter compares against that locally held value. Same primitive the
+ * project already has evidence for, same properties above. Do not treat the read form as a
+ * hardware requirement of this design.
+ *
+ * On real hardware the counter is finite-width. Two things follow, not one: the comparison must
+ * become a signed difference, (int64_t)(cnt - target) < 0, AND the target must be truncated to the
+ * counter's width when it is armed, or the two sides are taken modulo different values and the
+ * signed-difference trick fails. It also assumes a waiter is never more than half a counter range
+ * behind. None of this bites here; uint32_t over a few hundred placements never wraps.
+ *
+ * See g_placed[] for where the value a waiter compares against comes from. */
+static uint32_t g_sim_cnt[DISPATCH_THREAD_CNT][EXE_TYPE_CNT][AIC_CNT];
+
+/* Retirements of the tick in progress, merged into g_sim_cnt once every engine has been visited.
+ * Without this, visibility would depend on the order sim_tick() happens to walk its engines: a
+ * type-0 retirement would already be in g_sim_cnt when the type-1 engines are examined later in
+ * the SAME call, so a cube->vector successor would start on the very tick its predecessor retired
+ * while a vector->cube one waited a tick, and a same-type successor - which shares one engine, and
+ * an engine is examined once per tick - always waited a tick. The engine needing real inter-engine
+ * signalling would have been modelled as the fastest of the three.
+ *
+ * Staging makes a tick an atomic step: every engine observes the counters as they stood at the
+ * start of the tick, and all updates land at the end, so the walk order stops mattering and every
+ * handoff costs exactly one tick. Same reason a cellular automaton computes the next generation
+ * from the previous board rather than updating in place. */
+static uint32_t g_sim_cnt_pending[DISPATCH_THREAD_CNT][EXE_TYPE_CNT][AIC_CNT];
 
 /* Ordering oracle. Written only by the simulator, i.e. only by the owning dispatch thread, so
  * an assertion over these is sound where reading g_state_buf would be racy and lagging. */
 uint64_t g_sim_start[RING_SIZE];
 uint64_t g_sim_retire[RING_SIZE];
 
-static inline void sim_place(int tid, int type, int core, int slot, uint32_t task_id, bool needs_notify)
+static inline void sim_place(int tid, int type, int core, int slot, uint32_t task_id,
+                             uint64_t wait_target)
 {
     sim_slot_t *s = &g_sim[tid][type][core][slot];
     s->task_id = task_id;
     s->remaining = SIM_TICKS;
     s->occupied = 1;
     s->started = 0;
-    s->waiting_notify = needs_notify ? 1 : 0;
-    if (needs_notify) {
-        /* Discard any stale mailbox entry accumulated before this wait began - the paired unit
-         * posts unconditionally on every retirement, whether or not anyone is listening, so this
-         * mailbox may already read 1 from unrelated past traffic even if this (type, core) has
-         * never run anything before. */
-        g_cross_notify[tid][type][core] = 0;
-    }
+    s->wait_target = wait_target;
 }
 
 static void sim_tick(int tid)
@@ -264,16 +315,18 @@ static void sim_tick(int tid)
                 continue;
             }
 
-            /* Cross-type early dispatch: held here until the paired unit's mailbox says its
-             * predecessor retired. Neither ticked nor marked started while waiting - see the
-             * struct comment on g_cross_notify for why the check is unconditional and safe.
-             * The mailbox itself is not re-cleared here: sim_place() already cleared it the
-             * moment this wait began, so a stale re-read is not possible, and this task never
-             * checks it again once unblocked. */
-            if (s[run].waiting_notify) {
-                if (g_cross_notify[tid][type][core]) {
-                    s[run].waiting_notify = 0;
-                }
+            /* Cross-type early dispatch: held here until the paired engine has retired as many
+             * tasks as this successor was told to wait for. Neither ticked nor marked started
+             * while waiting. No latch is needed - the counter never decreases, so once the
+             * comparison passes it passes on every later tick too, and re-reading cannot see a
+             * cleared or stale value.
+             *
+             * Counter updates are staged to the end of the tick (see g_sim_cnt_pending), so the
+             * value read here is always the one from the start of this tick. A successor therefore
+             * starts exactly one tick after its predecessor retired, in every direction and for
+             * both the same-type and cross-type paths, and start(S) > retire(P) holds strictly -
+             * the ordering oracle keeps a tick of margin instead of resting on equality. */
+            if (g_sim_cnt[tid][type ^ 1][core] < s[run].wait_target) {
                 continue;
             }
 
@@ -286,7 +339,23 @@ static void sim_tick(int tid)
                 s[run].occupied = 0;
                 s[run].started = 0;
                 g_ctrl_t[tid].msg_bitmap[type][run] |= (uint64_t)0x1 << core;
-                g_cross_notify[tid][type ^ 1][core] = 1; /* post to the paired unit's mailbox, unconditionally */
+                g_sim_cnt_pending[tid][type][core]++; /* visible to other engines next tick */
+                #ifdef EARLY_DISPATCH_CROSS_TYPE
+                /* Retirement order equals placement order on this engine. Necessary for the
+                 * target scheme - if the arbiter ever retired out of order, every target on this
+                 * engine would name a different task's retirement - but not sufficient: a target
+                 * can still name the wrong task while this holds, if it was derived from the
+                 * wrong sequence number in the first place.
+                 *
+                 * Note what this can and cannot cover. EARLY_DISPATCH_CROSS_TYPE implies
+                 * SIM_LATENCY && !REAL_CHIP (see the #error at the top), so this never executes
+                 * against real silicon - it is a regression guard on the arbiter in sim_tick()
+                 * just above, in particular the g_sim_next handling, which has needed a fix once
+                 * already. The same property on real hardware is an open question for the
+                 * hardware owners, not something this assert answers. */
+                assert(g_sim_cnt[tid][type][core] + g_sim_cnt_pending[tid][type][core]
+                       == g_place_seq[s[run].task_id]);
+                #endif
                 g_sim_next[tid][type][core] = run ^ 1; /* examine the sibling next */
                 if (!s[0].occupied && !s[1].occupied) {
                     /* That retirement emptied the core, so the phase pointer resets to slot 0 NOW,
@@ -299,6 +368,15 @@ static void sim_tick(int tid)
                     g_sim_next[tid][type][core] = 0;
                 }
             }
+        }
+    }
+
+    /* End of tick: publish this tick's retirements. Nothing above reads g_sim_cnt_pending except
+     * the assert, so no engine can have observed them while the walk was still in progress. */
+    for (int type = 0; type < EXE_TYPE_CNT; type++) {
+        for (int core = 0; core < AIC_CNT_PER_THREAD; core++) {
+            g_sim_cnt[tid][type][core] += g_sim_cnt_pending[tid][type][core];
+            g_sim_cnt_pending[tid][type][core] = 0;
         }
     }
 }
@@ -382,13 +460,19 @@ static inline void push_2_completed_queue(int tid)
  * to translate completion bits back into task ids, and mark the slot busy. Shared by the normal
  * ready path and by early dispatch so the two cannot drift apart.
  *
- * needs_notify is forwarded to sim_place() unchanged: true only for a cross-type S placed onto an
- * idle destination, false for everything else (P, and every same-type placement). See sim_tick.md
- * for what the flag does once the task is resident. */
+ * wait_target is forwarded to sim_place() unchanged: non-zero only for a cross-type S placed onto
+ * an idle destination, where it names the value the predecessor's engine counter must reach, and 0
+ * for everything else. See sim_slot_t for the encoding. */
 static inline void place_task(ctrl_t *ctrl, int type, int core, int slot, uint32_t task_id,
-                               bool needs_notify)
+                               uint64_t wait_target)
 {
     uint64_t mask = (uint64_t)0x1 << core;
+
+    #ifdef EARLY_DISPATCH_CROSS_TYPE
+    /* Pre-increment: the first task placed on an engine gets sequence 1, so 0 stays available as
+     * "not waiting" in wait_target. */
+    g_place_seq[task_id] = ++g_placed[ctrl->tid][type][core];
+    #endif
 
     if (slot == 1) {
         ctrl->task_id_map2[type][core] = task_id;
@@ -407,7 +491,7 @@ static inline void place_task(ctrl_t *ctrl, int type, int core, int slot, uint32
 
     #ifndef REAL_CHIP
     #ifdef SIM_LATENCY
-    sim_place((int)ctrl->tid, type, core, slot, task_id, needs_notify);
+    sim_place((int)ctrl->tid, type, core, slot, task_id, wait_target);
     #else
     ctrl->msg_bitmap[type][slot] |= mask;   /* fake return: retires next round */
     #endif
@@ -452,7 +536,7 @@ static int plant_pass(int tid)
                 if (g_early_dispatched[s]) {
                     g_early_skipped_dup++;
                 } else {
-                    place_task(ctrl, type, (int)idx, free_slot, s, false);
+                    place_task(ctrl, type, (int)idx, free_slot, s, 0);
                     early_record_plant(p, s);
                     g_early_plants++;
                     planted++;
@@ -479,11 +563,30 @@ static int plant_pass(int tid)
                     g_early_skipped_dup++;
                 } else {
                     int ctype = type ^ 1;
+                    /* Both destination slots free, not just one. This is load-bearing beyond
+                     * occupancy: whichever of two mutually-waiting cross plants was placed second
+                     * went onto a fully idle engine, which means everything the first one waits
+                     * on had already retired - so a wait cycle between two engines cannot form.
+                     * Relaxing this to "one slot free" to match the same-type plant opens that
+                     * cycle, and the result is a permanent hang, because an early-dispatched task
+                     * never returns through ready_queue. */
                     bool dest_idle = (ctrl->free_bitmap[ctype][0] & mask) != 0
                                    && (ctrl->free_bitmap[ctype][1] & mask) != 0;
                     if (dest_idle) {
+                        /* Read P's own recorded sequence rather than the engine's current
+                         * g_placed[]: the same-type block above may already have planted a
+                         * different successor onto this very engine, which would have bumped
+                         * g_placed past P and made cs wait for that successor instead. Two
+                         * successors legitimately sharing one P is routine - the hints are
+                         * independent, see the comment above - so this is not a corner case.
+                         *
+                         * Snapshotting here is safe even if P retires before the comparison is
+                         * first evaluated: the target is absolute, so an already-satisfied one
+                         * simply never blocks. That is the property the old one-bit mailbox
+                         * lacked. */
+                        uint64_t wait_target = g_place_seq[p];
                         g_cross_hint[p] = EARLY_NONE;
-                        place_task(ctrl, ctype, (int)idx, 0, cs, true);
+                        place_task(ctrl, ctype, (int)idx, 0, cs, wait_target);
                         early_record_plant(p, cs);
                         g_cross_plants++;
                         planted++;
@@ -547,7 +650,7 @@ static inline int send_task(ctrl_t *ctrl, int type)
         int slot = (ctrl->free_bitmap[type][0] & mask) != 0 ? 0 : 1;
         int core = (int)idx;
 
-        place_task(ctrl, type, core, slot, task_id, false);
+        place_task(ctrl, type, core, slot, task_id, 0);
 
         WORKER_LOGF("send,task_id,%u,core,%d,slot,%d,type,%d", task_id, core, slot, type);
         sent++;
