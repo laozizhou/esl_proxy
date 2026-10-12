@@ -468,6 +468,12 @@ static inline void place_task(ctrl_t *ctrl, int type, int core, int slot, uint32
 {
     uint64_t mask = (uint64_t)0x1 << core;
 
+    /* The caller picked this slot; it must actually be free. Overwriting a live resident is
+     * silent otherwise - free_bitmap's bit is already clear so the clear below is a no-op, and
+     * the damage only surfaces later as a retire-order assert or a hang. Cheap to check here,
+     * where the culprit is still on the stack. */
+    assert((ctrl->free_bitmap[type][slot] & mask) != 0);
+
     #ifdef EARLY_DISPATCH_CROSS_TYPE
     /* Pre-increment: the first task placed on an engine gets sequence 1, so 0 stays available as
      * "not waiting" in wait_target. */
@@ -547,15 +553,17 @@ static int plant_pass(int tid)
 
 #ifdef EARLY_DISPATCH_CROSS_TYPE
             /* P has nothing ahead of it on its own core (same "exactly one busy slot" proof as
-             * above), so a pending cross-type successor is safe to place the instant its
-             * destination - the paired core, same index, opposite type - is fully idle. Same-type
-             * and cross-type hints are independent (two different successors can each have P as
-             * their last predecessor), so this never branches off the outcome above.
+             * above), so a pending cross-type successor is safe to place as soon as its
+             * destination - the paired core, same index, opposite type - has a free slot.
+             * Same-type and cross-type hints are independent (two different successors can each
+             * have P as their last predecessor), so this never branches off the outcome above.
              *
              * Unlike the same-type hint, this one is NOT consumed on a failed destination check:
-             * "destination busy right now" is not "stale", and P stays the sole occupant of its
-             * own core across rounds until it retires, so plant_pass will simply see this same
-             * (p, cs) pair again next round and can still succeed once the destination frees up. */
+             * "both destination slots busy right now" is not "stale", so the pair is left for a
+             * later round. That retry is opportunistic, not guaranteed - the same-type block above
+             * may fill P's sibling slot in this very iteration, which takes P's core to XOR == 0
+             * and stops it ever being a candidate again, and P may simply retire first. In either
+             * case the hint is dead and cs reaches a unit through ready_queue instead. */
             uint32_t cs = g_cross_hint[p];
             if (cs != EARLY_NONE) {
                 if (g_early_dispatched[cs]) {
@@ -563,15 +571,25 @@ static int plant_pass(int tid)
                     g_early_skipped_dup++;
                 } else {
                     int ctype = type ^ 1;
-                    /* Both destination slots free, not just one. This is load-bearing beyond
-                     * occupancy: whichever of two mutually-waiting cross plants was placed second
-                     * went onto a fully idle engine, which means everything the first one waits
-                     * on had already retired - so a wait cycle between two engines cannot form.
-                     * Relaxing this to "one slot free" to match the same-type plant opens that
-                     * cycle, and the result is a permanent hang, because an early-dispatched task
-                     * never returns through ready_queue. */
+                    /* One free slot is enough, same admission rule send_task() uses. No wait cycle
+                     * can form between two engines, and that does not depend on how idle the
+                     * destination is: every edge of the wait-for graph points strictly backwards
+                     * in placement time. A successor's target names a task that was already
+                     * resident when the successor was armed, and an engine runs its residents in
+                     * placement order, so a task can only be held up by something placed before
+                     * it. A cycle would need an edge pointing forward, and there is none.
+                     *
+                     * This also lowers the average occupancy cost of a plant, though it does not
+                     * remove it. Under the old rule every plant parked on a fully idle engine and
+                     * the phase pointer selected it at once, so the wait stalled that engine for
+                     * essentially a whole task duration. The relaxed rule is a superset - plenty
+                     * of plants still land on an empty destination and still stall it - but the
+                     * ones that land behind a running task wait for free. Measured stall per plant
+                     * falls to roughly 0.5-0.8x. The trade is more head-of-line blocking: a
+                     * waiting head stalls its sibling too, and a blocked speculative task can now
+                     * take an engine's last free slot, which the old rule structurally prevented. */
                     bool dest_idle = (ctrl->free_bitmap[ctype][0] & mask) != 0
-                                   && (ctrl->free_bitmap[ctype][1] & mask) != 0;
+                                   || (ctrl->free_bitmap[ctype][1] & mask) != 0;
                     if (dest_idle) {
                         /* Read P's own recorded sequence rather than the engine's current
                          * g_placed[]: the same-type block above may already have planted a
@@ -585,13 +603,27 @@ static int plant_pass(int tid)
                          * simply never blocks. That is the property the old one-bit mailbox
                          * lacked. */
                         uint64_t wait_target = g_place_seq[p];
+                        /* Picking the free slot is a correctness requirement of the relaxed
+                         * admission test above, not a style match with send_task(). While the test
+                         * demanded both slots free, hardcoding slot 0 was safe. Now the common
+                         * case is slot 0 busy and slot 1 free, where a hardcoded 0 would overwrite
+                         * a live resident: sim_place() replaces the slot, task_id_map1 is
+                         * clobbered, and free_bitmap's bit is already clear so nothing flags it.
+                         * The overwritten task never retires and its engine's counter stays one
+                         * short of every target armed against it afterwards. These two lines and
+                         * the || above must never be separated.
+                         *
+                         * Slot 0 first, like every other placement site: nothing is ever placed
+                         * into slot 1 while slot 0 is free, which is what keeps per-engine
+                         * retirement order equal to placement order. */
+                        int cslot = (ctrl->free_bitmap[ctype][0] & mask) != 0 ? 0 : 1;
                         g_cross_hint[p] = EARLY_NONE;
-                        place_task(ctrl, ctype, (int)idx, 0, cs, wait_target);
+                        place_task(ctrl, ctype, (int)idx, cslot, cs, wait_target);
                         early_record_plant(p, cs);
                         g_cross_plants++;
                         planted++;
                         WORKER_LOGF("early,cross_plant,successor,%u,predecessor,%u,core,%d,"
-                                    "type,%d", cs, p, (int)idx, ctype);
+                                    "type,%d,slot,%d", cs, p, (int)idx, ctype, cslot);
                     }
                 }
             }
